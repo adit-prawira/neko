@@ -2,7 +2,10 @@
 /neko
 engine/target/
 *.o
+*.a
 *.dylib
+*.so
+simd/test_*
 
 # — Embedded model —
 engine/models/*.onnx

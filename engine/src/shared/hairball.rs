@@ -19,7 +19,7 @@ impl Display for Hairball {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let code = match self {
             Hairball::Ok => "HAIRBALL_OK",
-            Hairball::NotFound => "HAIRBALL_NOTFOUND",
+            Hairball::NotFound => "HAIRBALL_NOT_FOUND",
             Hairball::AlreadyExists => "HAIRBALL_ALREADY_EXISTS",
             Hairball::DimMismatch => "HAIRBALL_DIM_MISMATCH",
             Hairball::DimTooLarge => "HAIRBALL_DIM_TOO_LARGE",

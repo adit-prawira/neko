@@ -76,7 +76,7 @@ impl SegmentReader {
 
     pub fn get_vector(&self, index: u64) -> Result<&[f32]> {
         let entry = self.read_index_entry(index)?;
-        let header_size = std::mem::size_of::<SegmentReader>() as u64;
+        let header_size = std::mem::size_of::<SegmentHeader>() as u64;
         let start = (header_size + entry.vector_offset) as usize;
         let end = start + (self.meta.dim as usize * std::mem::size_of::<f32>());
         let bytes = &self.vector_mmap[start..end];
@@ -87,7 +87,7 @@ impl SegmentReader {
 
     pub fn get_metadata(&self, index: u64) -> Result<VectorMetadata> {
         let entry = self.read_index_entry(index)?;
-        let header_size = std::mem::size_of::<SegmentReader>() as u64;
+        let header_size = std::mem::size_of::<SegmentHeader>() as u64;
         let meta_file = File::open(self.meta.directory.join("segment.meta"))?;
         let meta_mmap = unsafe { Mmap::map(&meta_file)? };
         let start = (header_size + entry.meta_offset) as usize;

@@ -30,7 +30,7 @@ pub struct SegmentWriter {
 impl SegmentWriter {
     pub fn new(directory: &Path, name: &str, dim: u32) -> Result<Self> {
         let segment_directory = directory.join(name);
-        let _ = fs::create_dir_all(&segment_directory);
+        fs::create_dir_all(&segment_directory)?;
 
         let vector_path = segment_directory.join("segment.vec");
         let meta_path = segment_directory.join("segment.meta");
@@ -64,7 +64,7 @@ impl SegmentWriter {
         })
     }
 
-    pub fn append(&mut self, vector: &[&f32], metadata: &VectorMetadata) -> Result<u64> {
+    pub fn append(&mut self, vector: &[f32], metadata: &VectorMetadata) -> Result<u64> {
         if vector.len() != self.dim as usize {
             return Err(Hairball::DimMismatch);
         }
@@ -72,7 +72,7 @@ impl SegmentWriter {
         let meta_length = meta_bytes.len() as u64;
 
         let vector_start = self.vector_file.seek(SeekFrom::End(0))?;
-        let vector_data: &[u8] = unsafe { std::slice::from_raw_parts(vector.as_ptr() as *const u8, vector.len() * std::mem::size_of::<f32>()) };
+        let vector_data: &[u8] = unsafe { std::slice::from_raw_parts(vector.as_ptr() as *const u8, std::mem::size_of_val(vector)) };
         self.vector_file.write_all(vector_data)?;
 
         let meta_start = self.meta_file.seek(SeekFrom::End(0))?;

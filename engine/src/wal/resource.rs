@@ -26,3 +26,32 @@ pub struct WalEntry {
     pub vector: Vec<f32>,
     pub metadata: VectorMetadata,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_a_valid_insert_byte_then_from_u8_returns_insert_variant() {
+        let result = OperationCode::from_u8(0x01);
+        assert_eq!(result, Ok(OperationCode::Insert));
+    }
+
+    #[test]
+    fn given_a_valid_delete_byte_then_from_u8_returns_delete_variant() {
+        let result = OperationCode::from_u8(0x02);
+        assert_eq!(result, Ok(OperationCode::Delete));
+    }
+
+    #[test]
+    fn given_an_invalid_byte_then_from_u8_returns_corrupted_segment_error() {
+        let result = OperationCode::from_u8(0xFF);
+        assert_eq!(result, Err(Hairball::CorruptedSegment));
+    }
+
+    #[test]
+    fn given_operationcode_variants_then_discriminants_match_wal_binary_format() {
+        assert_eq!(OperationCode::Insert as u8, 0x01);
+        assert_eq!(OperationCode::Delete as u8, 0x02);
+    }
+}

@@ -126,3 +126,141 @@ impl SegmentReader {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::segment::resource::VectorMetadata;
+    use crate::segment::writer::SegmentWriter;
+    use crate::shared::hairball::Hairball;
+    use std::fs;
+    use std::io::Write;
+    use std::path::Path;
+
+    use super::*;
+
+    fn make_metadata(id: &str, custom: &str) -> VectorMetadata {
+        VectorMetadata {
+            id: id.to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: custom.to_string(),
+        }
+    }
+
+    fn create_test_segment(directory: &Path, dim: u32, vectors: &[(&[f32], VectorMetadata)]) -> SegmentMeta {
+        let mut writer = SegmentWriter::new(directory, "test_seg", dim).unwrap();
+        for (vec, meta) in vectors {
+            writer.append(vec, meta).unwrap();
+        }
+        writer.finish().unwrap()
+    }
+
+    #[test]
+    fn given_a_segment_with_no_vectors_then_open_returns_reader_with_zero_length() {
+        let dir = std::env::temp_dir().join("neko_test_reader_empty");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let meta = create_test_segment(&dir, 3, &[]);
+        let reader = SegmentReader::open(&dir.join("test_seg"), meta).unwrap();
+
+        assert_eq!(reader.length(), 0);
+        assert_eq!(reader.iter_vectors().count(), 0);
+    }
+
+    #[test]
+    fn given_a_segment_with_two_vectors_then_get_vector_returns_correct_data() {
+        let dir = std::env::temp_dir().join("neko_test_reader_vectors");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let vectors = [(&[1.0_f32, 2.0, 3.0][..], make_metadata("a", "")), (&[4.0_f32, 5.0, 6.0][..], make_metadata("b", ""))];
+        let meta = create_test_segment(&dir, 3, &vectors);
+        let reader = SegmentReader::open(&dir.join("test_seg"), meta).unwrap();
+
+        assert_eq!(reader.length(), 2);
+        assert_eq!(reader.get_vector(0).unwrap(), &[1.0, 2.0, 3.0]);
+        assert_eq!(reader.get_vector(1).unwrap(), &[4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn given_a_segment_with_custom_metadata_then_get_metadata_returns_full_metadata() {
+        let dir = std::env::temp_dir().join("neko_test_reader_meta");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let vectors = [
+            (&[1.0_f32, 2.0_f32][..], make_metadata("vec_a", "extra_a")),
+            (&[3.0_f32, 4.0_f32][..], make_metadata("vec_b", "extra_b")),
+        ];
+        let meta = create_test_segment(&dir, 2, &vectors);
+        let reader = SegmentReader::open(&dir.join("test_seg"), meta).unwrap();
+
+        let meta0 = reader.get_metadata(0).unwrap();
+        assert_eq!(meta0.id, "vec_a");
+        assert_eq!(meta0.custom, "extra_a");
+
+        let meta1 = reader.get_metadata(1).unwrap();
+        assert_eq!(meta1.id, "vec_b");
+        assert_eq!(meta1.custom, "extra_b");
+    }
+
+    #[test]
+    fn given_a_segment_with_two_vectors_then_iter_vectors_yields_all_in_order() {
+        let dir = std::env::temp_dir().join("neko_test_reader_iter");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let vectors = [(&[10.0_f32, 20.0_f32][..], make_metadata("x", "")), (&[30.0_f32, 40.0_f32][..], make_metadata("y", ""))];
+        let meta = create_test_segment(&dir, 2, &vectors);
+        let reader = SegmentReader::open(&dir.join("test_seg"), meta).unwrap();
+
+        let mut iter = reader.iter_vectors();
+        assert_eq!(iter.next().unwrap().unwrap(), &[10.0, 20.0]);
+        assert_eq!(iter.next().unwrap().unwrap(), &[30.0, 40.0]);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn given_a_segment_with_known_dimension_then_dim_returns_correct_value() {
+        let dir = std::env::temp_dir().join("neko_test_reader_dim");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let meta = create_test_segment(&dir, 128, &[]);
+        let reader = SegmentReader::open(&dir.join("test_seg"), meta).unwrap();
+
+        assert_eq!(reader.dim(), 128);
+    }
+
+    #[test]
+    fn given_a_valid_segment_then_open_succeeds() {
+        let dir = std::env::temp_dir().join("neko_test_reader_open_valid");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let meta = create_test_segment(&dir, 4, &[]);
+        let result = SegmentReader::open(&dir.join("test_seg"), meta);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn given_a_segment_file_with_corrupted_header_then_open_returns_corrupted_segment_error() {
+        let dir = std::env::temp_dir().join("neko_test_reader_corrupt");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let _meta = create_test_segment(&dir, 4, &[]);
+
+        let mut file = std::fs::OpenOptions::new().write(true).open(dir.join("test_seg").join("segment.vec")).unwrap();
+        file.write_all(&[0xFF; 8]).unwrap();
+
+        let meta = SegmentMeta {
+            directory: dir.join("test_seg"),
+            dim: 4,
+            count: 0,
+        };
+        let result = SegmentReader::open(&dir.join("test_seg"), meta);
+        assert!(matches!(result, Err(Hairball::CorruptedSegment)));
+    }
+}

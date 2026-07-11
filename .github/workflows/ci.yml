@@ -47,3 +47,15 @@ jobs:
       - name: test
         run: cargo test
         working-directory: engine
+
+  golang:
+    name: golang
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build
+        run: make build
+
+      - name: verify
+        run: ./neko version | grep "neko v0.1.0"

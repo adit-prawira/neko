@@ -48,14 +48,17 @@ jobs:
         run: cargo test
         working-directory: engine
 
-  golang:
-    name: golang
+  cli:
+    name: Go CLI/TUI and Server
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: build
         run: make build
+
+      - name: test
+        run: CGO_LDFLAGS="-L$PWD/engine/target/release -lneko_engine -Wl,-rpath,$PWD/engine/target/release" go test ./...
 
       - name: verify
         run: ./neko version | grep "neko v0.1.0"

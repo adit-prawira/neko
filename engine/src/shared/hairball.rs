@@ -8,11 +8,13 @@ pub enum Hairball {
     AlreadyExists = 2,
     DimMismatch = 3,
     DimTooLarge = 4,
-    InvalidName = 5,
-    IoError = 6,
-    SerializeError = 7,
-    CorruptedSegment = 8,
-    InternalError = 9,
+    DimTooSmall = 5,
+    InvalidName = 6,
+    IoError = 7,
+    SerializeError = 8,
+    CorruptedSegment = 9,
+    InternalError = 10,
+    InvalidMetric = 11,
 }
 
 impl Display for Hairball {
@@ -23,11 +25,13 @@ impl Display for Hairball {
             Hairball::AlreadyExists => "HAIRBALL_ALREADY_EXISTS",
             Hairball::DimMismatch => "HAIRBALL_DIM_MISMATCH",
             Hairball::DimTooLarge => "HAIRBALL_DIM_TOO_LARGE",
+            Hairball::DimTooSmall => "HAIRBALL_DIM_TOO_SMALL",
             Hairball::InvalidName => "HAIRBALL_INVALID_NAME",
             Hairball::IoError => "HAIRBALL_IO_ERROR",
             Hairball::SerializeError => "HAIRBALL_SERIALIZE_ERROR",
             Hairball::CorruptedSegment => "HAIRBALL_CORRUPTED_SEGMENT",
             Hairball::InternalError => "HAIRBALL_INTERNAL_ERROR",
+            Hairball::InvalidMetric => "HAIRBALL_INVALID_METRIC",
         };
         write!(f, "{}", code)
     }
@@ -90,10 +94,12 @@ mod tests {
         assert_eq!(Hairball::AlreadyExists as u32, 2);
         assert_eq!(Hairball::DimMismatch as u32, 3);
         assert_eq!(Hairball::DimTooLarge as u32, 4);
-        assert_eq!(Hairball::InvalidName as u32, 5);
-        assert_eq!(Hairball::IoError as u32, 6);
-        assert_eq!(Hairball::SerializeError as u32, 7);
-        assert_eq!(Hairball::CorruptedSegment as u32, 8);
-        assert_eq!(Hairball::InternalError as u32, 9);
+        assert_eq!(Hairball::DimTooSmall as u32, 5);
+        assert_eq!(Hairball::InvalidName as u32, 6);
+        assert_eq!(Hairball::IoError as u32, 7);
+        assert_eq!(Hairball::SerializeError as u32, 8);
+        assert_eq!(Hairball::CorruptedSegment as u32, 9);
+        assert_eq!(Hairball::InternalError as u32, 10);
+        assert_eq!(Hairball::InvalidMetric as u32, 11);
     }
 }

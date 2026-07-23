@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"unsafe"
 
 	"github.com/adit-prawira/neko/internal/ffi"
 	"github.com/spf13/cobra"
@@ -21,7 +23,14 @@ func NewRootCommand() *cobra.Command {
 		SilenceUsage:  true,
 	}
 
-	rootCmd.AddCommand(newVersionCmd(), newCreateCmd(), newListCmd(), newDropCmd())
+	rootCmd.AddCommand(
+		newVersionCmd(),
+		newCreateCmd(),
+		newListCmd(),
+		newDropCmd(),
+		newInsertCmd(),
+		newGetCmd(),
+	)
 	return rootCmd
 }
 
@@ -104,6 +113,81 @@ func newDropCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "collection '%s' dropped\n", args[0])
+			return nil
+		},
+	}
+}
+
+func newInsertCmd() *cobra.Command {
+	var (
+		insertId   string
+		insertFile string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "insert <collection> --id <ID> --file <vec.f32>",
+		Short: "Insert a vector into a collection",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ensureEngine(); err != nil {
+				return err
+			}
+			name := args[0]
+			data, err := os.ReadFile(insertFile)
+			if err != nil {
+				return fmt.Errorf("cannot read file '%s': %w", insertFile, err)
+			}
+			if len(data)%4 != 0 {
+				return fmt.Errorf("file '%s' has invalid size: must be a multiple of 4 bytes (raw f32)", insertFile)
+			}
+
+			floats := unsafe.Slice((*float32)(unsafe.Pointer(&data[0])), len(data)/4)
+			if err := ffi.Insert(name, insertId, floats, ""); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "vector '%s' inserted into '%s' (dim=%d)\n", insertId, name, len(floats))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&insertId, "id", "", "vector ID (required)")
+	cmd.Flags().StringVar(&insertFile, "file", "", "path to raw f32 vector file (required)")
+	cmd.MarkFlagRequired("id")
+	cmd.MarkFlagRequired("file")
+	return cmd
+}
+
+func newGetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <collection> <id>",
+		Short: "Retrieve a vector by ID",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ensureEngine(); err != nil {
+				return err
+			}
+
+			name := args[0]
+			id := args[1]
+
+			stats, err := ffi.Stats(name)
+			if err != nil {
+				return err
+			}
+
+			vector, err := ffi.Get(name, id, stats.Dim)
+			if err != nil {
+				return err
+			}
+
+			for i, val := range vector {
+				if i > 0 {
+					fmt.Fprint(cmd.OutOrStdout(), ",")
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%g", val)
+			}
+			fmt.Fprintln(cmd.OutOrStdout())
 			return nil
 		},
 	}

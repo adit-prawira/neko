@@ -185,3 +185,76 @@ func TestCreateWithModel(t *testing.T) {
 	}
 	testCleanup("go_test_model")
 }
+
+func TestInsertAndGet(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_insert_get")
+
+	if err := Create("go_test_insert_get", 3, MetricCosine, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	vector := []float32{1.0, 2.0, 3.0}
+	if err := Insert("go_test_insert_get", "doc1", vector, ""); err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	result, err := Get("go_test_insert_get", "doc1", 3)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if result[0] != 1.0 || result[1] != 2.0 || result[2] != 3.0 {
+		t.Errorf("vector mismatch: got [%v %v %v], want [1 2 3]", result[0], result[1], result[2])
+	}
+}
+
+func TestInsertDimMismatch(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_insert_dim")
+
+	if err := Create("go_test_insert_dim", 3, MetricCosine, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	vector := []float32{1.0, 2.0}
+	if err := Insert("go_test_insert_dim", "doc1", vector, ""); err == nil {
+		t.Error("expected error for dim mismatch, got nil")
+	}
+}
+
+func TestInsertNonexistentCollection(t *testing.T) {
+	testInit(t)
+
+	vector := []float32{1.0}
+	if err := Insert("no_such_collection_zzz", "doc1", vector, ""); err == nil {
+		t.Error("expected error for nonexistent collection, got nil")
+	}
+}
+
+func TestGetNonexistentId(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_get_nf")
+
+	if err := Create("go_test_get_nf", 3, MetricCosine, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	_, err := Get("go_test_get_nf", "no_such_doc", 3)
+	if err == nil {
+		t.Error("expected error for nonexistent id, got nil")
+	}
+}
+
+func TestInsertWithEmptyVector(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_empty_vec")
+
+	if err := Create("go_test_empty_vec", 3, MetricCosine, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	emptyVector := []float32{}
+	if err := Insert("go_test_empty_vec", "doc1", emptyVector, ""); err == nil {
+		t.Error("expected error for empty vector, got nil")
+	}
+}

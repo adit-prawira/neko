@@ -185,3 +185,88 @@ impl WalWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use crate::wal::replayer::WalReplayer;
+
+    use super::*;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("neko_test_{}", name));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn given_a_new_wal_writer_then_tail_log_is_created() {
+        let dir = temp_dir("wal_writer_open");
+        let _wal = WalWriter::open(&dir, 64).unwrap();
+
+        let tail_log = dir.join("wal").join("tail.log");
+        assert!(tail_log.exists(), "tail.log should exist after WalWriter::open");
+    }
+
+    #[test]
+    fn given_an_insert_then_entry_is_written_and_file_grows() {
+        let dir = temp_dir("wal_writer_insert");
+        let mut wal = WalWriter::open(&dir, 64).unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        let size_before = wal.bytes_written;
+        wal.append_insert("col:doc1", &vector, &metadata).unwrap();
+
+        assert!(wal.bytes_written > size_before, "bytes_written should increase after an insert");
+        let tail_log = dir.join("wal").join("tail.log");
+        assert!(tail_log.metadata().unwrap().len() > 0, "tail.log should contain data after insert");
+    }
+
+    #[test]
+    fn given_a_delete_then_bytes_written_increases() {
+        let dir = temp_dir("wal_writer_delete");
+        let mut wal = WalWriter::open(&dir, 64).unwrap();
+
+        let size_before = wal.bytes_written;
+        wal.append_delete("col:doc1").unwrap();
+
+        assert!(wal.bytes_written > size_before, "bytes_written should increase after a delete");
+    }
+
+    #[test]
+    fn given_insert_and_delete_then_replayed_entries_match() {
+        let dir = temp_dir("wal_writer_roundtrip");
+        let mut wal = WalWriter::open(&dir, 64).unwrap();
+
+        let vector = vec![4.0_f32, 5.0_f32, 6.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 12345,
+            deleted: false,
+            custom: String::new(),
+        };
+        wal.append_insert("col:doc1", &vector, &metadata).unwrap();
+        wal.append_delete("col:doc2").unwrap();
+
+        let entries = WalReplayer::replay_file(&dir.join("wal").join("tail.log")).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        assert_eq!(entries[0].operation_code, OperationCode::Insert);
+        assert_eq!(entries[0].collection, "col");
+        assert_eq!(entries[0].id, "doc1");
+        assert_eq!(entries[0].vector, vec![4.0, 5.0, 6.0]);
+        assert_eq!(entries[0].metadata.created_at, 12345);
+
+        assert_eq!(entries[1].operation_code, OperationCode::Delete);
+        assert_eq!(entries[1].collection, "col");
+        assert_eq!(entries[1].id, "doc2");
+    }
+}

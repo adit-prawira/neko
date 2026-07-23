@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::manifest::manager::ManifestManager;
 use crate::manifest::resource::Manifest;
+use crate::segment::resource::VectorMetadata;
 use crate::shared::hairball::Hairball;
 use crate::shared::results::{NekoStats, Result};
+use crate::wal::replayer::WalReplayer;
+use crate::wal::resource::WalEntry;
+use crate::wal::writer::WalWriter;
 
 use super::resource::Clowder;
 use super::validator::EngineValidator;
@@ -16,6 +20,7 @@ pub static ENGINE: OnceLock<RwLock<Engine>> = OnceLock::new();
 pub struct Engine {
     pub clowders: HashMap<String, Arc<Clowder>>,
     pub data_directory: PathBuf,
+    pub wal: Option<WalWriter>,
 }
 
 pub struct CreateClowderDto<'a> {
@@ -72,13 +77,34 @@ impl Engine {
                     dim: manifest.dim,
                     metric: manifest.metric,
                     model: manifest.model,
+                    vectors: Mutex::new(HashMap::new()),
                 }),
             );
         }
-
+        let wal_entries = Self::replay_wal_entries(&collection_directory)?;
+        for entry in &wal_entries {
+            let Some(clowder) = clowders.get(&entry.collection) else {
+                continue;
+            };
+            match entry.operation_code {
+                crate::wal::resource::OperationCode::Insert => {
+                    clowder.vectors.lock().unwrap().insert(entry.id.clone(), entry.vector.clone());
+                }
+                crate::wal::resource::OperationCode::Delete => {
+                    clowder.vectors.lock().unwrap().remove(&entry.id);
+                }
+            }
+        }
+        let wal = WalWriter::open(&collection_directory, 64)
+            .map_err(|err| {
+                eprintln!("WAL: failed to open write-ahead log ({}); insert will not be persisted", err);
+                err
+            })
+            .ok();
         let engine = Self {
             clowders,
             data_directory: data_directory.to_path_buf(),
+            wal,
         };
         match ENGINE.set(RwLock::new(engine)) {
             Ok(_) | Err(_) => Ok(()),
@@ -115,6 +141,7 @@ impl Engine {
                 dim: payload.dim,
                 metric: payload.metric,
                 model: payload.model.map(|model| model.to_string()),
+                vectors: Mutex::new(HashMap::new()),
             }),
         );
         Ok(())
@@ -151,6 +178,52 @@ impl Engine {
             index_type: 0,
         })
     }
+
+    pub fn insert_vector(&mut self, name: &str, id: &str, vector: Vec<f32>, metadata: &VectorMetadata) -> Result<()> {
+        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        if vector.len() != clowder.dim as usize {
+            return Err(Hairball::DimMismatch);
+        }
+        let wal_id = format!("{}:{}", name, id);
+        if let Some(ref mut wal) = self.wal {
+            wal.append_insert(&wal_id, &vector, metadata)?;
+        }
+
+        clowder.vectors.lock().unwrap().insert(id.to_string(), vector);
+        Ok(())
+    }
+
+    pub fn get_vector(&self, name: &str, id: &str) -> Result<Vec<f32>> {
+        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        let vectors = clowder.vectors.lock().unwrap();
+        vectors.get(id).cloned().ok_or(Hairball::NotFound)
+    }
+
+    pub fn replay_wal_entries(collection_directory: &Path) -> Result<Vec<WalEntry>> {
+        let mut entries = Vec::new();
+
+        let wal_directory = collection_directory.join("wal");
+        if !wal_directory.exists() {
+            return Ok(Vec::new());
+        }
+        let mut tail_log_entries: Vec<_> = fs::read_dir(&wal_directory)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with("tail.") && name.ends_with(".log") && name != "tail.log"
+            })
+            .collect();
+        tail_log_entries.sort_by_key(|entry| entry.file_name());
+        for entry in tail_log_entries {
+            entries.extend(WalReplayer::replay_file(&entry.path())?);
+        }
+
+        let tail_log_path = collection_directory.join("wal").join("tail.log");
+        if tail_log_path.exists() {
+            entries.extend(WalReplayer::replay_file(&tail_log_path)?);
+        }
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
@@ -160,6 +233,7 @@ mod tests {
 
     use crate::manifest::manager::ManifestManager;
     use crate::manifest::resource::Manifest;
+    use crate::segment::resource::VectorMetadata;
 
     use super::*;
 
@@ -169,6 +243,7 @@ mod tests {
         Engine {
             clowders: HashMap::new(),
             data_directory: data_dir,
+            wal: None,
         }
     }
 
@@ -425,5 +500,98 @@ mod tests {
         assert_eq!(manifest.dim, 384);
         assert_eq!(manifest.metric, 1);
         assert_eq!(manifest.version, 1);
+    }
+
+    #[test]
+    fn given_valid_insert_then_get_returns_correct_vector() {
+        let dir = temp_dir("engine_insert_get");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 1,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        engine.insert_vector("docs", "doc1", vector.clone(), &metadata).unwrap();
+        let retrieved = engine.get_vector("docs", "doc1").unwrap();
+        assert_eq!(retrieved, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn given_insert_wrong_dim_then_returns_dim_mismatch() {
+        let dir = temp_dir("engine_insert_dim");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 1,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        let result = engine.insert_vector("docs", "doc1", vector, &metadata);
+        assert_eq!(result.unwrap_err(), Hairball::DimMismatch);
+    }
+
+    #[test]
+    fn given_insert_nonexistent_clowder_then_returns_not_found() {
+        let dir = temp_dir("engine_insert_nonexistent");
+        let mut engine = new_engine(&dir);
+        let vector = vec![1.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        let result = engine.insert_vector("no_such_clowder", "doc1", vector, &metadata);
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_get_nonexistent_id_then_returns_not_found() {
+        let dir = temp_dir("engine_get_nonexistent");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 1,
+                model: None,
+            })
+            .unwrap();
+
+        let result = engine.get_vector("docs", "no_such_doc");
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_empty_wal_directory_then_replay_returns_empty() {
+        let dir = temp_dir("engine_replay_empty");
+        std::fs::create_dir_all(dir.join("wal")).unwrap();
+
+        let entries = Engine::replay_wal_entries(&dir).unwrap();
+        assert!(entries.is_empty());
     }
 }

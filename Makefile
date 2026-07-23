@@ -1,4 +1,4 @@
-.PHONY: build test clean
+.PHONY: build test clean format
 
 build:
 	cd simd && make
@@ -16,3 +16,8 @@ clean:
 	cd simd && make clean
 	cd engine && cargo clean
 	rm -f neko
+
+format:
+	cd engine && cargo fmt
+	CGO_LDFLAGS="-L$$PWD/engine/target/release -lneko_engine -Wl,-rpath,$$PWD/engine/target/release" \
+	go fmt ./...

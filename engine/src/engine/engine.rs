@@ -12,6 +12,7 @@ use crate::wal::replayer::WalReplayer;
 use crate::wal::resource::WalEntry;
 use crate::wal::writer::WalWriter;
 
+use super::knn::{KNN, KNNSearchParams, ScoredVector};
 use super::resource::Clowder;
 use super::validator::EngineValidator;
 
@@ -96,10 +97,7 @@ impl Engine {
             }
         }
         let wal = WalWriter::open(&collection_directory, 64)
-            .map_err(|err| {
-                eprintln!("WAL: failed to open write-ahead log ({}); insert will not be persisted", err);
-                err
-            })
+            .inspect_err(|err| eprintln!("WAL: failed to open write-ahead log ({}); insert will not be persisted", err))
             .ok();
         let engine = Self {
             clowders,
@@ -184,12 +182,23 @@ impl Engine {
         if vector.len() != clowder.dim as usize {
             return Err(Hairball::DimMismatch);
         }
-        let wal_id = format!("{}:{}", name, id);
-        if let Some(ref mut wal) = self.wal {
-            wal.append_insert(&wal_id, &vector, metadata)?;
+
+        let mut normalised_vector = vector;
+        if clowder.metric == 1 {
+            let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
+            if normalised_squares > 1e-18 {
+                let inverse_normal = 1.0 / normalised_squares.sqrt();
+                for component in &mut normalised_vector {
+                    *component *= inverse_normal;
+                }
+            }
         }
 
-        clowder.vectors.lock().unwrap().insert(id.to_string(), vector);
+        let wal_id = format!("{}:{}", name, id);
+        if let Some(ref mut wal) = self.wal {
+            wal.append_insert(&wal_id, &normalised_vector, metadata)?;
+        }
+        clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector);
         Ok(())
     }
 
@@ -223,6 +232,24 @@ impl Engine {
             entries.extend(WalReplayer::replay_file(&tail_log_path)?);
         }
         Ok(entries)
+    }
+
+    pub fn search(&self, name: &str, query: &[f32], top_k: usize) -> Result<Vec<ScoredVector>> {
+        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+
+        if query.len() != clowder.dim as usize {
+            return Err(Hairball::DimMismatch);
+        }
+        let vectors = clowder.vectors.lock().unwrap();
+        KNN::search(
+            &vectors,
+            &KNNSearchParams {
+                query,
+                top_k,
+                metric: clowder.metric,
+                dim: clowder.dim,
+            },
+        )
     }
 }
 
@@ -525,7 +552,8 @@ mod tests {
 
         engine.insert_vector("docs", "doc1", vector.clone(), &metadata).unwrap();
         let retrieved = engine.get_vector("docs", "doc1").unwrap();
-        assert_eq!(retrieved, vec![1.0, 2.0, 3.0]);
+        let inv_norm = 1.0 / (1.0_f32 * 1.0 + 2.0 * 2.0 + 3.0 * 3.0).sqrt();
+        assert_eq!(retrieved, vec![1.0 * inv_norm, 2.0 * inv_norm, 3.0 * inv_norm]);
     }
 
     #[test]
@@ -593,5 +621,87 @@ mod tests {
 
         let entries = Engine::replay_wal_entries(&dir).unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn given_l2_vectors_then_search_returns_nearest_by_distance() {
+        let dir = temp_dir("engine_search_l2");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let meta = VectorMetadata {
+            id: "".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("pts", "a", vec![1.0, 0.0], &meta).unwrap();
+        engine.insert_vector("pts", "b", vec![9.0, 0.0], &meta).unwrap();
+        engine.insert_vector("pts", "c", vec![3.0, 0.0], &meta).unwrap();
+
+        let results = engine.search("pts", &[0.0, 0.0], 3).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].id, "a");
+        assert!(results[0].score <= results[1].score);
+        assert!(results[1].score <= results[2].score);
+    }
+
+    #[test]
+    fn given_search_nonexistent_clowder_then_returns_not_found() {
+        let dir = temp_dir("engine_search_nf");
+        let engine = new_engine(&dir);
+        let result = engine.search("ghost", &[1.0, 2.0], 5);
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_search_wrong_query_dim_then_returns_dim_mismatch() {
+        let dir = temp_dir("engine_search_dim");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let result = engine.search("pts", &[1.0, 2.0], 5);
+        assert_eq!(result.unwrap_err(), Hairball::DimMismatch);
+    }
+
+    #[test]
+    fn given_search_top_k_one_then_returns_single_best() {
+        let dir = temp_dir("engine_search_top1");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 1,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let meta = VectorMetadata {
+            id: "".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("pts", "far", vec![100.0], &meta).unwrap();
+        engine.insert_vector("pts", "near", vec![2.0], &meta).unwrap();
+
+        let results = engine.search("pts", &[0.0], 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "near");
     }
 }

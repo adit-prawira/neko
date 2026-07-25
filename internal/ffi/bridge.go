@@ -27,6 +27,11 @@ type NekoStats struct {
 	IndexType    uint8
 }
 
+type NekoSearchResult struct {
+	ID    string
+	Score float32
+}
+
 var MetricNames = map[uint8]string{
 	MetricL2:     "l2",
 	MetricCosine: "cosine",
@@ -187,6 +192,36 @@ func Get(name, id string, dim uint32) ([]float32, error) {
 	}
 
 	return vector, nil
+}
+
+func Search(name string, query []float32, topK uint32) ([]NekoSearchResult, error) {
+	if len(query) == 0 {
+		return nil, fmt.Errorf("query must not be empty")
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	var result C.NekoSearchResult
+	code := C.neko_search(cName, (*C.float)(&query[0]), C.uint32_t(len(query)), C.uint32_t(topK), &result)
+	if code != 0 {
+		return nil, fmt.Errorf("search failed: error code %d", int(code))
+	}
+	defer C.neko_free_result(&result)
+	total := int(result.total)
+	if total == 0 {
+		return []NekoSearchResult{}, nil
+	}
+	results := make([]NekoSearchResult, total)
+	ids := unsafe.Slice(result.ids, total)
+	scores := unsafe.Slice(result.scores, total)
+
+	for i := range results {
+		results[i] = NekoSearchResult{
+			ID:    C.GoString(ids[i]),
+			Score: float32(scores[i]),
+		}
+	}
+	return results, nil
 }
 
 func ParseMetric(name string) (uint8, error) {

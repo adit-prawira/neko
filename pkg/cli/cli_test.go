@@ -178,7 +178,7 @@ func TestInsertCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("cli_test_insert_tc")
-	if err := ffi.Create("cli_test_insert_tc", 3, ffi.MetricCosine, ""); err != nil {
+	if err := ffi.Create("cli_test_insert_tc", 3, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -218,7 +218,7 @@ func TestGetCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("cli_test_get_tc")
-	if err := ffi.Create("cli_test_get_tc", 3, ffi.MetricCosine, ""); err != nil {
+	if err := ffi.Create("cli_test_get_tc", 3, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -254,5 +254,49 @@ func TestGetCommandNonexistentId(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Error("expected error for nonexistent id")
+	}
+}
+
+func TestSearchCommand(t *testing.T) {
+	dir := cliSetup(t)
+	defer os.RemoveAll(dir)
+
+	ffi.Drop("cli_test_search")
+	if err := ffi.Create("cli_test_search", 3, ffi.MetricL2, ""); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	ffi.Insert("cli_test_search", "far", []float32{10.0, 0.0, 0.0}, "")
+	ffi.Insert("cli_test_search", "near", []float32{2.0, 0.0, 0.0}, "")
+	ffi.Insert("cli_test_search", "mid", []float32{5.0, 0.0, 0.0}, "")
+
+	queryFile := filepath.Join(dir, "query.f32")
+	writeRawF32(queryFile, []float32{1.0, 0.0, 0.0})
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetArgs([]string{"search", "cli_test_search", "--file", queryFile, "--k", "2"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("search command failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "near") || !strings.Contains(output, "mid") {
+		t.Errorf("search output missing expected IDs: %q", output)
+	}
+	if strings.Contains(output, "far") {
+		t.Errorf("search output contains far (should not be in top-2): %q", output)
+	}
+}
+
+func TestSearchCommandMissingFile(t *testing.T) {
+	cliSetup(t)
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"search", "some_collection", "--file", "/nonexistent/query.f32"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Error("expected error for missing file")
 	}
 }

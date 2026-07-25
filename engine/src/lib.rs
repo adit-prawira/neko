@@ -4,7 +4,7 @@ use std::path::Path;
 use self::engine::engine::{CreateClowderDto, ENGINE, Engine};
 use self::segment::resource::VectorMetadata;
 use self::shared::hairball::Hairball;
-use self::shared::results::NekoStats;
+use self::shared::results::{NekoSearchResult, NekoStats};
 
 pub mod engine;
 pub mod manifest;
@@ -274,6 +274,83 @@ pub unsafe extern "C" fn neko_get(name: *const c_char, id: *const c_char, vector
     }
 }
 
+/// Search top-K nearest neighbors in a collection.
+///
+/// # Safety
+/// `name` must be a valid null-terminated C string. `query` must point to `dim` valid f32 values.
+/// `results` must point to writable memory. `filter` may be null (accepted but not evaluated).
+/// Caller must free results via `neko_free_result`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn neko_search(name: *const c_char, query: *const f32, dim: u32, top_k: u32, results: *mut NekoSearchResult) -> c_int {
+    if results.is_null() || query.is_null() {
+        return Hairball::InternalError as c_int;
+    }
+    let raw_name_string = unsafe { c_str_to_string(name) };
+    let name_str = match raw_name_string {
+        Some(string) => string,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    let engine = match ENGINE.get() {
+        Some(engine) => engine,
+        None => return Hairball::InternalError as c_int,
+    };
+    let query_slice = unsafe { std::slice::from_raw_parts(query, dim as usize) };
+    let scored_vectors = match engine.read().unwrap().search(&name_str, query_slice, top_k as usize) {
+        Ok(vector) => vector,
+        Err(err) => return err as c_int,
+    };
+
+    let total = scored_vectors.len() as u32;
+    if total == 0 {
+        unsafe {
+            (*results).total = 0;
+            (*results).ids = std::ptr::null_mut();
+            (*results).scores = std::ptr::null_mut();
+        }
+        return 0;
+    }
+
+    let mut ids: Vec<*mut c_char> = scored_vectors.iter().map(|sv| CString::new(sv.id.clone()).unwrap().into_raw()).collect();
+    let mut scores: Vec<f32> = scored_vectors.iter().map(|sv| sv.score).collect();
+
+    unsafe {
+        (*results).total = total;
+        (*results).ids = ids.as_mut_ptr();
+        (*results).scores = scores.as_mut_ptr();
+    }
+    std::mem::forget(ids);
+    std::mem::forget(scores);
+    0
+}
+
+/// Free search results allocated by `neko_search`. Must be called exactly once per search.
+///
+/// # Safety
+/// `results` must have been allocated by `neko_search`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn neko_free_result(results: *mut NekoSearchResult) {
+    if results.is_null() {
+        return;
+    }
+
+    let results = unsafe { &mut *results };
+    let total = results.total as usize;
+    if !results.ids.is_null() && total > 0 {
+        let ids = unsafe { Vec::from_raw_parts(results.ids, total, total) };
+        for id in ids {
+            if id.is_null() {
+                continue;
+            };
+            let _ = unsafe { CString::from_raw(id) };
+        }
+    }
+
+    if !results.scores.is_null() && total > 0 {
+        let _ = unsafe { Vec::from_raw_parts(results.scores, total, total) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,7 +540,8 @@ mod tests {
         let mut out = vec![0.0_f32; 3];
         let result = unsafe { neko_get(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3) };
         assert_eq!(result, 0);
-        assert_eq!(out, vec![7.0, 8.0, 9.0]);
+        let inv_norm = 1.0 / (7.0_f32 * 7.0 + 8.0 * 8.0 + 9.0 * 9.0).sqrt();
+        assert_eq!(out, vec![7.0 * inv_norm, 8.0 * inv_norm, 9.0 * inv_norm]);
     }
 
     #[test]
@@ -538,6 +616,103 @@ mod tests {
         let mut out = vec![0.0_f32; 2];
         let result = unsafe { neko_get(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 2) };
         assert_eq!(result, 0);
-        assert_eq!(out, vec![9.0, 10.0]);
+        let inv_norm = 1.0 / (9.0_f32 * 9.0 + 10.0 * 10.0).sqrt();
+        assert_eq!(out, vec![9.0 * inv_norm, 10.0 * inv_norm]);
+    }
+
+    #[test]
+    fn given_empty_clowder_then_search_returns_zero_results() {
+        ffi_init();
+        ffi_cleanup("ffi_test_search_empty");
+        let collection = CString::new("ffi_test_search_empty").unwrap();
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        let query: [f32; 3] = [1.0, 0.0, 0.0];
+        let mut results = NekoSearchResult {
+            total: 0,
+            ids: std::ptr::null_mut(),
+            scores: std::ptr::null_mut(),
+        };
+        let code = unsafe { neko_search(collection.as_ptr(), query.as_ptr(), 3, 5, &mut results) };
+        assert_eq!(code, 0);
+        assert_eq!(results.total, 0);
+        assert!(results.ids.is_null());
+        assert!(results.scores.is_null());
+        unsafe { neko_free_result(&mut results) };
+    }
+
+    #[test]
+    fn given_l2_vectors_then_search_returns_nearest_by_score() {
+        ffi_init();
+        ffi_cleanup("ffi_test_search_l2");
+        let collection = CString::new("ffi_test_search_l2").unwrap();
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        let doc_a = CString::new("a").unwrap();
+        let doc_b = CString::new("b").unwrap();
+        let doc_c = CString::new("c").unwrap();
+        let vec_a: [f32; 3] = [10.0, 0.0, 0.0];
+        let vec_b: [f32; 3] = [2.0, 0.0, 0.0];
+        let vec_c: [f32; 3] = [5.0, 0.0, 0.0];
+        unsafe {
+            neko_insert(collection.as_ptr(), doc_a.as_ptr(), vec_a.as_ptr(), 3, std::ptr::null());
+            neko_insert(collection.as_ptr(), doc_b.as_ptr(), vec_b.as_ptr(), 3, std::ptr::null());
+            neko_insert(collection.as_ptr(), doc_c.as_ptr(), vec_c.as_ptr(), 3, std::ptr::null());
+        }
+
+        let query: [f32; 3] = [1.0, 0.0, 0.0];
+        let mut results = NekoSearchResult {
+            total: 0,
+            ids: std::ptr::null_mut(),
+            scores: std::ptr::null_mut(),
+        };
+        let code = unsafe { neko_search(collection.as_ptr(), query.as_ptr(), 3, 2, &mut results) };
+        assert_eq!(code, 0);
+        assert_eq!(results.total, 2);
+
+        let ids = unsafe { std::slice::from_raw_parts(results.ids, 2) };
+        let scores = unsafe { std::slice::from_raw_parts(results.scores, 2) };
+        let id0 = unsafe { CStr::from_ptr(ids[0]) }.to_str().unwrap();
+        let id1 = unsafe { CStr::from_ptr(ids[1]) }.to_str().unwrap();
+        assert_eq!(id0, "b");
+        assert_eq!(id1, "c");
+        assert!(scores[0] < scores[1]);
+
+        unsafe { neko_free_result(&mut results) };
+    }
+
+    #[test]
+    fn given_nonexistent_clowder_then_search_returns_not_found() {
+        ffi_init();
+        let collection = CString::new("no_such_search_collection").unwrap();
+        let query: [f32; 3] = [1.0, 0.0, 0.0];
+        let mut results = NekoSearchResult {
+            total: 0,
+            ids: std::ptr::null_mut(),
+            scores: std::ptr::null_mut(),
+        };
+        let code = unsafe { neko_search(collection.as_ptr(), query.as_ptr(), 3, 5, &mut results) };
+        assert_eq!(code, Hairball::NotFound as i32);
+    }
+
+    #[test]
+    fn given_null_query_ptr_then_search_returns_internal_error() {
+        ffi_init();
+        ffi_cleanup("ffi_test_search_nullq");
+        let collection = CString::new("ffi_test_search_nullq").unwrap();
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        let mut results = NekoSearchResult {
+            total: 0,
+            ids: std::ptr::null_mut(),
+            scores: std::ptr::null_mut(),
+        };
+        let code = unsafe { neko_search(collection.as_ptr(), std::ptr::null(), 3, 5, &mut results) };
+        assert_eq!(code, Hairball::InternalError as i32);
+    }
+
+    #[test]
+    fn given_free_result_null_then_no_crash() {
+        unsafe { neko_free_result(std::ptr::null_mut()) };
     }
 }

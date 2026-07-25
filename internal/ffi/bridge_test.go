@@ -190,7 +190,7 @@ func TestInsertAndGet(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_insert_get")
 
-	if err := Create("go_test_insert_get", 3, MetricCosine, ""); err != nil {
+	if err := Create("go_test_insert_get", 3, MetricL2, ""); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -256,5 +256,57 @@ func TestInsertWithEmptyVector(t *testing.T) {
 	emptyVector := []float32{}
 	if err := Insert("go_test_empty_vec", "doc1", emptyVector, ""); err == nil {
 		t.Error("expected error for empty vector, got nil")
+	}
+}
+
+func TestSearchReturnsNearest(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_search")
+
+	if err := Create("go_test_search", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	Insert("go_test_search", "far", []float32{10.0, 0.0, 0.0}, "")
+	Insert("go_test_search", "near", []float32{2.0, 0.0, 0.0}, "")
+	Insert("go_test_search", "mid", []float32{5.0, 0.0, 0.0}, "")
+
+	results, err := Search("go_test_search", []float32{1.0, 0.0, 0.0}, 2)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	if results[0].ID != "near" || results[1].ID != "mid" {
+		t.Errorf("unexpected order: got %s/%s, want near/mid", results[0].ID, results[1].ID)
+	}
+	if results[0].Score > results[1].Score {
+		t.Errorf("scores not ascending: %f > %f", results[0].Score, results[1].Score)
+	}
+}
+
+func TestSearchEmptyQuery(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_search_eq")
+
+	if err := Create("go_test_search_eq", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	_, err := Search("go_test_search_eq", []float32{}, 5)
+	if err == nil {
+		t.Error("expected error for empty query")
+	}
+}
+
+func TestSearchNonexistentCollection(t *testing.T) {
+	testInit(t)
+
+	_, err := Search("no_such_search_coll", []float32{1.0, 2.0, 3.0}, 5)
+	if err == nil {
+		t.Error("expected error for nonexistent collection")
 	}
 }

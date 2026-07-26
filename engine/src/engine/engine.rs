@@ -208,6 +208,22 @@ impl Engine {
         vectors.get(id).cloned().ok_or(Hairball::NotFound)
     }
 
+    pub fn delete_vector(&mut self, name: &str, id: &str) -> Result<()> {
+        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        let exist = clowder.vectors.lock().unwrap().contains_key(id);
+
+        if !exist {
+            return Err(Hairball::NotFound);
+        }
+
+        let wal_id = format!("{}:{}", name, id);
+        if let Some(ref mut wal) = self.wal {
+            wal.append_delete(&wal_id)?;
+        }
+        clowder.vectors.lock().unwrap().remove(id);
+        Ok(())
+    }
+
     pub fn replay_wal_entries(collection_directory: &Path) -> Result<Vec<WalEntry>> {
         let mut entries = Vec::new();
 
@@ -703,5 +719,87 @@ mod tests {
         let results = engine.search("pts", &[0.0], 1).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "near");
+    }
+
+    #[test]
+    fn given_delete_existing_vector_then_get_returns_not_found() {
+        let dir = temp_dir("engine_delete_get");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("docs", "doc1", vector, &metadata).unwrap();
+        engine.delete_vector("docs", "doc1").unwrap();
+
+        let result = engine.get_vector("docs", "doc1");
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_delete_nonexistent_id_then_returns_not_found() {
+        let dir = temp_dir("engine_delete_bad_id");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let result = engine.delete_vector("docs", "ghost");
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_delete_nonexistent_clowder_then_returns_not_found() {
+        let dir = temp_dir("engine_delete_bad_clowder");
+        let mut engine = new_engine(&dir);
+
+        let result = engine.delete_vector("ghost", "some_id");
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_delete_vector_then_search_excludes_deleted() {
+        let dir = temp_dir("engine_delete_search");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let metadata = VectorMetadata {
+            id: "".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("pts", "keep", vec![1.0, 0.0], &metadata).unwrap();
+        engine.insert_vector("pts", "toss", vec![5.0, 0.0], &metadata).unwrap();
+
+        engine.delete_vector("pts", "toss").unwrap();
+
+        let results = engine.search("pts", &[0.0, 0.0], 2).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "keep");
     }
 }

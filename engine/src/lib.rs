@@ -351,6 +351,35 @@ pub unsafe extern "C" fn neko_free_result(results: *mut NekoSearchResult) {
     }
 }
 
+/// Delete a vector by ID from a collection.
+///
+/// # Safety
+/// `name` and `id` must be valid, null-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn neko_delete(name: *const c_char, id: *const c_char) -> c_int {
+    let raw_name_string = unsafe { c_str_to_string(name) };
+    let name_str = match raw_name_string {
+        Some(string) => string,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    let raw_id_string = unsafe { c_str_to_string(id) };
+    let id_str = match raw_id_string {
+        Some(string) => string,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    let engine = match ENGINE.get() {
+        Some(engine) => engine,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    match engine.write().unwrap().delete_vector(&name_str, &id_str) {
+        Ok(_) => 0,
+        Err(err) => err as c_int,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,5 +743,59 @@ mod tests {
     #[test]
     fn given_free_result_null_then_no_crash() {
         unsafe { neko_free_result(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn given_delete_existing_via_ffi_then_get_returns_not_found() {
+        ffi_init();
+        ffi_cleanup("ffi_test_delete");
+
+        let collection = CString::new("ffi_test_delete").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [1.0, 2.0, 3.0];
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
+
+        let result = unsafe { neko_delete(collection.as_ptr(), doc_id.as_ptr()) };
+        assert_eq!(result, 0);
+
+        let mut out = vec![0.0_f32; 3];
+        let get_result = unsafe { neko_get(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3) };
+        assert_eq!(get_result, Hairball::NotFound as i32);
+    }
+
+    #[test]
+    fn given_delete_nonexistent_id_via_ffi_then_returns_not_found() {
+        ffi_init();
+        ffi_cleanup("ffi_test_delete_nf");
+
+        let collection = CString::new("ffi_test_delete_nf").unwrap();
+        let doc_id = CString::new("ghost").unwrap();
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        let result = unsafe { neko_delete(collection.as_ptr(), doc_id.as_ptr()) };
+        assert_eq!(result, Hairball::NotFound as i32);
+    }
+
+    #[test]
+    fn given_delete_nonexistent_clowder_via_ffi_then_returns_not_found() {
+        ffi_init();
+
+        let collection = CString::new("no_such_clowder_delete").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+
+        let result = unsafe { neko_delete(collection.as_ptr(), doc_id.as_ptr()) };
+        assert_eq!(result, Hairball::NotFound as i32);
+    }
+
+    #[test]
+    fn given_delete_null_name_via_ffi_then_returns_internal_error() {
+        ffi_init();
+
+        let doc_id = CString::new("doc1").unwrap();
+        let result = unsafe { neko_delete(std::ptr::null(), doc_id.as_ptr()) };
+        assert_eq!(result, Hairball::InternalError as i32);
     }
 }

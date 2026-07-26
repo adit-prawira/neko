@@ -310,3 +310,47 @@ func TestSearchNonexistentCollection(t *testing.T) {
 		t.Error("expected error for nonexistent collection")
 	}
 }
+
+func TestDeleteExistingVector(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_delete")
+
+	if err := Create("go_test_delete", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	vector := []float32{4.0, 5.0, 6.0}
+	if err := Insert("go_test_delete", "doc1", vector, ""); err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	if err := Delete("go_test_delete", "doc1"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	_, err := Get("go_test_delete", "doc1", 3)
+	if err == nil {
+		t.Error("expected NotFound after delete, got nil")
+	}
+}
+
+func TestDeleteNonexistentId(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_delete_nf")
+
+	if err := Create("go_test_delete_nf", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := Delete("go_test_delete_nf", "ghost"); err == nil {
+		t.Error("expected error for nonexistent id, got nil")
+	}
+}
+
+func TestDeleteNonexistentCollection(t *testing.T) {
+	testInit(t)
+
+	if err := Delete("no_such_clowder_delete", "doc1"); err == nil {
+		t.Error("expected error for nonexistent collection, got nil")
+	}
+}

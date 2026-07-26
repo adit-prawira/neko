@@ -188,10 +188,25 @@ func Get(name, id string, dim uint32) ([]float32, error) {
 	vector := make([]float32, dim)
 	code := C.neko_get(cName, cId, (*C.float)(&vector[0]), C.uint32_t(dim))
 	if code != 0 {
-		return nil, fmt.Errorf("cannot get vector '%s' from '%s': error code %d", id, name, code)
+		return nil, fmt.Errorf("cannot get vector '%s' from '%s': error code %d", id, name, int(code))
 	}
 
 	return vector, nil
+}
+
+func Delete(name, id string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	cId := C.CString(id)
+	defer C.free(unsafe.Pointer(cId))
+
+	code := C.neko_delete(cName, cId)
+	if code != 0 {
+		return fmt.Errorf("cannot delete vector '%s' from '%s': error code %d", id, name, int(code))
+	}
+
+	return nil
 }
 
 func Search(name string, query []float32, topK uint32) ([]NekoSearchResult, error) {

@@ -31,6 +31,7 @@ func NewRootCommand() *cobra.Command {
 		newInsertCmd(),
 		newGetCmd(),
 		newSearchCmd(),
+		newDeleteCmd(),
 	)
 	return rootCmd
 }
@@ -229,6 +230,28 @@ func newGetCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "%g", val)
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
+			return nil
+		},
+	}
+}
+
+func newDeleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <collection> <id>",
+		Short: "Delete a vector by ID",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ensureEngine(); err != nil {
+				return err
+			}
+
+			name := args[0]
+			id := args[1]
+			if err := ffi.Delete(name, id); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "vector '%s' deleted from '%s'\n", id, name)
 			return nil
 		},
 	}

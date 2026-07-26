@@ -300,3 +300,58 @@ func TestSearchCommandMissingFile(t *testing.T) {
 		t.Error("expected error for missing file")
 	}
 }
+
+func TestDeleteCommand(t *testing.T) {
+	dir := cliSetup(t)
+	defer os.RemoveAll(dir)
+
+	ffi.Drop("test_delete_cli")
+	if err := ffi.Create("test_delete_cli", 3, ffi.MetricL2, ""); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if err := ffi.Insert("test_delete_cli", "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+
+	cmd.SetArgs([]string{"delete", "test_delete_cli", "doc1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("delete command failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "deleted") {
+		t.Errorf("expected delete confirmation, got: %q", output)
+	}
+}
+
+func TestDeleteCommandNonexistentId(t *testing.T) {
+	dir := cliSetup(t)
+	defer os.RemoveAll(dir)
+
+	ffi.Drop("test_delete_nf_cli")
+	if err := ffi.Create("test_delete_nf_cli", 3, ffi.MetricL2, ""); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"delete", "test_delete_nf_cli", "ghost"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Error("expected error for deleting nonexistent id")
+	}
+}
+
+func TestDeleteCommandNonexistentCollection(t *testing.T) {
+	cliSetup(t)
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"delete", "no_such_clowder_delete", "doc1"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Error("expected error for deleting from nonexistent collection")
+	}
+}

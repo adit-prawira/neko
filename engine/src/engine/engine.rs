@@ -202,6 +202,31 @@ impl Engine {
         Ok(())
     }
 
+    pub fn upsert_vector(&mut self, name: &str, id: &str, vector: Vec<f32>, metadata: &VectorMetadata) -> Result<()> {
+        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        if vector.len() != clowder.dim as usize {
+            return Err(Hairball::DimMismatch);
+        }
+        let mut normalised_vector = vector;
+        if clowder.metric == 1 {
+            let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
+            if normalised_squares > 1e-18 {
+                let inverse_normal = 1.0 / normalised_squares.sqrt();
+                for component in &mut normalised_vector {
+                    *component *= inverse_normal;
+                }
+            }
+        }
+
+        let wal_id = format!("{}:{}", name, id);
+        if let Some(ref mut wal) = self.wal {
+            wal.append_delete(&wal_id)?;
+            wal.append_insert(&wal_id, &normalised_vector, metadata)?;
+        }
+        clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector);
+        Ok(())
+    }
+
     pub fn get_vector(&self, name: &str, id: &str) -> Result<Vec<f32>> {
         let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
         let vectors = clowder.vectors.lock().unwrap();
@@ -610,6 +635,98 @@ mod tests {
         };
 
         let result = engine.insert_vector("no_such_clowder", "doc1", vector, &metadata);
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_valid_upsert_then_get_returns_correct_vector() {
+        let dir = temp_dir("engine_upsert_get");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 1,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        engine.upsert_vector("docs", "doc1", vector.clone(), &metadata).unwrap();
+        let retrieved = engine.get_vector("docs", "doc1").unwrap();
+        let inv_norm = 1.0 / (1.0_f32 * 1.0 + 2.0 * 2.0 + 3.0 * 3.0).sqrt();
+        assert_eq!(retrieved, vec![1.0 * inv_norm, 2.0 * inv_norm, 3.0 * inv_norm]);
+    }
+
+    #[test]
+    fn given_upsert_existing_vector_then_value_is_replaced() {
+        let dir = temp_dir("engine_upsert_replace");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        engine.insert_vector("docs", "doc1", vec![1.0_f32, 0.0, 0.0], &metadata).unwrap();
+        engine.upsert_vector("docs", "doc1", vec![0.0_f32, 1.0, 0.0], &metadata).unwrap();
+        let retrieved = engine.get_vector("docs", "doc1").unwrap();
+        assert_eq!(retrieved, vec![0.0_f32, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn given_upsert_wrong_dim_then_returns_dim_mismatch() {
+        let dir = temp_dir("engine_upsert_dim");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        let result = engine.upsert_vector("docs", "doc1", vec![1.0_f32, 2.0_f32], &metadata);
+        assert_eq!(result.unwrap_err(), Hairball::DimMismatch);
+    }
+
+    #[test]
+    fn given_upsert_nonexistent_clowder_then_returns_not_found() {
+        let dir = temp_dir("engine_upsert_nonexistent");
+        let mut engine = new_engine(&dir);
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        let result = engine.upsert_vector("no_such_clowder", "doc1", vec![1.0_f32], &metadata);
         assert_eq!(result.unwrap_err(), Hairball::NotFound);
     }
 

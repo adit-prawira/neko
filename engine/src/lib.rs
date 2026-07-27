@@ -234,6 +234,55 @@ pub unsafe extern "C" fn neko_insert(name: *const c_char, id: *const c_char, vec
     }
 }
 
+/// Upsert (insert-or-update) a vector into a collection.
+///
+/// # Safety
+/// `name` and `id` must be valid, null-terminated C strings. `vector` must point to `len` valid f32 values. `metadata` may be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn neko_upsert(name: *const c_char, id: *const c_char, vector: *const f32, len: u32, metadata: *const c_char) -> c_int {
+    let raw_name_string = unsafe { c_str_to_string(name) };
+    let name_str = match raw_name_string {
+        Some(string) => string,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    let raw_id_string = unsafe { c_str_to_string(id) };
+    let id_str = match raw_id_string {
+        Some(string) => string,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    if vector.is_null() || len == 0 {
+        return Hairball::DimTooSmall as c_int;
+    }
+
+    let raw_metadata_string = unsafe { c_str_to_string(metadata) };
+    let vector_metadata: VectorMetadata = match raw_metadata_string {
+        Some(string) if !string.is_empty() => serde_json::from_str::<VectorMetadata>(&string).unwrap_or(VectorMetadata {
+            id: id_str.clone(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        }),
+        _ => VectorMetadata {
+            id: id_str.clone(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        },
+    };
+
+    let engine = match ENGINE.get() {
+        Some(engine) => engine,
+        None => return Hairball::InternalError as c_int,
+    };
+    let vector_slice = unsafe { std::slice::from_raw_parts(vector, len as usize) };
+    match engine.write().unwrap().upsert_vector(&name_str, &id_str, vector_slice.to_vec(), &vector_metadata) {
+        Ok(_) => 0,
+        Err(err) => err as c_int,
+    }
+}
+
 /// Retrieve a vector by ID from a collection.
 ///
 /// # Safety
@@ -647,6 +696,88 @@ mod tests {
         assert_eq!(result, 0);
         let inv_norm = 1.0 / (9.0_f32 * 9.0 + 10.0 * 10.0).sqrt();
         assert_eq!(out, vec![9.0 * inv_norm, 10.0 * inv_norm]);
+    }
+
+    #[test]
+    fn given_valid_upsert_and_get_via_ffi_then_round_trips() {
+        ffi_init();
+        ffi_cleanup("ffi_test_upsert_roundtrip");
+
+        let collection = CString::new("ffi_test_upsert_roundtrip").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [7.0, 8.0, 9.0];
+
+        let result = unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+        assert_eq!(result, 0);
+
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
+        assert_eq!(result, 0);
+
+        let mut out = vec![0.0_f32; 3];
+        let result = unsafe { neko_get(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3) };
+        assert_eq!(result, 0);
+        let inv_norm = 1.0 / (7.0_f32 * 7.0 + 8.0 * 8.0 + 9.0 * 9.0).sqrt();
+        assert_eq!(out, vec![7.0 * inv_norm, 8.0 * inv_norm, 9.0 * inv_norm]);
+    }
+
+    #[test]
+    fn given_upsert_existing_via_ffi_then_value_is_replaced() {
+        ffi_init();
+        ffi_cleanup("ffi_test_upsert_replace");
+
+        let collection = CString::new("ffi_test_upsert_replace").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let first: [f32; 3] = [1.0, 0.0, 0.0];
+        let second: [f32; 3] = [0.0, 1.0, 0.0];
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), first.as_ptr(), 3, std::ptr::null()) };
+        unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), second.as_ptr(), 3, std::ptr::null()) };
+
+        let mut out = vec![0.0_f32; 3];
+        unsafe { neko_get(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3) };
+        assert_eq!(out, vec![0.0_f32, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn given_upsert_wrong_dim_via_ffi_then_returns_dim_mismatch() {
+        ffi_init();
+        ffi_cleanup("ffi_test_upsert_dim");
+
+        let collection = CString::new("ffi_test_upsert_dim").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 2] = [1.0, 2.0];
+
+        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 2, std::ptr::null()) };
+        assert_eq!(result, Hairball::DimMismatch as i32);
+    }
+
+    #[test]
+    fn given_upsert_nonexistent_collection_via_ffi_then_returns_not_found() {
+        ffi_init();
+
+        let collection = CString::new("no_such_collection_zzz_upsert").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [1.0, 2.0, 3.0];
+
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
+        assert_eq!(result, Hairball::NotFound as i32);
+    }
+
+    #[test]
+    fn given_upsert_null_vector_via_ffi_then_returns_dim_too_small() {
+        ffi_init();
+        ffi_cleanup("ffi_test_upsert_nullvec");
+
+        let collection = CString::new("ffi_test_upsert_nullvec").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), std::ptr::null(), 3, std::ptr::null()) };
+        assert_eq!(result, Hairball::DimTooSmall as i32);
     }
 
     #[test]

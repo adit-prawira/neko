@@ -213,6 +213,46 @@ func TestInsertCommandMissingFile(t *testing.T) {
 	}
 }
 
+func TestUpsertCommand(t *testing.T) {
+	dir := cliSetup(t)
+	defer os.RemoveAll(dir)
+
+	ffi.Drop("cli_test_upsert_tc")
+	if err := ffi.Create("cli_test_upsert_tc", 3, ffi.MetricL2, ""); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	tmpFile := filepath.Join(dir, "upsert_vector.f32")
+	if err := writeRawF32(tmpFile, []float32{0.5, 0.6, 0.7}); err != nil {
+		t.Fatalf("write vector file: %v", err)
+	}
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"upsert", "cli_test_upsert_tc", "--id", "doc1", "--file", tmpFile})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("upsert command failed: %v", err)
+	}
+
+	vector, err := ffi.Get("cli_test_upsert_tc", "doc1", 3)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if vector[0] != 0.5 || vector[1] != 0.6 || vector[2] != 0.7 {
+		t.Errorf("vector mismatch: got [%v %v %v]", vector[0], vector[1], vector[2])
+	}
+}
+
+func TestUpsertCommandMissingFile(t *testing.T) {
+	cliSetup(t)
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"upsert", "some_collection", "--id", "doc1", "--file", "/nonexistent/upsert_vector.f32"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Error("expected error for missing file")
+	}
+}
+
 func TestGetCommand(t *testing.T) {
 	dir := cliSetup(t)
 	defer os.RemoveAll(dir)

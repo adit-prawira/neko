@@ -5,6 +5,7 @@ import (
 	"os"
 	"unsafe"
 
+	"github.com/adit-prawira/neko/internal/api"
 	"github.com/adit-prawira/neko/internal/ffi"
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,7 @@ func NewRootCommand() *cobra.Command {
 		newSearchCmd(),
 		newDeleteCmd(),
 		newUpsertCmd(),
+		newServeCmd(),
 	)
 	return rootCmd
 }
@@ -298,6 +300,27 @@ func newDeleteCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newServeCmd() *cobra.Command {
+	var port int
+	var dataDirectory string
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start the neko REST server",
+		Long:  "Start the neko REST server on the configured port with graceful shutdown.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return api.Start(api.Config{
+				Port:          port,
+				DataDirectory: dataDirectory,
+			})
+		},
+	}
+
+	cmd.Flags().IntVar(&port, "port", 3434, "HTTP Port")
+	cmd.Flags().StringVar(&dataDirectory, "data-dir", ffi.DefaultDataDirectory(), "Data Directory")
+	return cmd
 }
 
 func ensureEngine() error {

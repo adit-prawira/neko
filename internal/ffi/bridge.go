@@ -32,6 +32,22 @@ type NekoSearchResult struct {
 	Score float32
 }
 
+type HairballError struct {
+	FunctionName string
+	Code         int
+}
+
+func (he *HairballError) Error() string {
+	return fmt.Sprintf("'%s': error code %d", he.FunctionName, he.Code)
+}
+
+func newHairballError(functionName string, code int) error {
+	return &HairballError{
+		FunctionName: functionName,
+		Code:         code,
+	}
+}
+
 var MetricNames = map[uint8]string{
 	MetricL2:     "l2",
 	MetricCosine: "cosine",
@@ -62,7 +78,7 @@ func Init(dataDirectory string) error {
 
 	code := C.neko_init(cDataDirectory)
 	if code != 0 {
-		return fmt.Errorf("engine init failed: error code %d", code)
+		return newHairballError("neko_init", int(code))
 	}
 	return nil
 }
@@ -83,7 +99,7 @@ func DefaultDataDirectory() string {
 func ShutDown() error {
 	code := C.neko_shutdown()
 	if code != 0 {
-		return fmt.Errorf("engine shutdown failed: error code %d", code)
+		return newHairballError("neko_shutdown", int(code))
 	}
 	return nil
 }
@@ -99,7 +115,7 @@ func Create(name string, dim uint32, metric uint8, model string) error {
 
 	code := C.neko_create(cName, C.uint32_t(dim), C.uint8_t(metric), cModel)
 	if code != 0 {
-		return fmt.Errorf("cannot create collection '%s', error code %d", name, int(code))
+		return newHairballError("neko_create", int(code))
 	}
 	return nil
 }
@@ -110,7 +126,7 @@ func List() ([]string, error) {
 
 	code := C.neko_list(&cNames, &cCount)
 	if code != 0 {
-		return nil, fmt.Errorf("cannot list collections: error code %d", int(code))
+		return nil, newHairballError("neko_list", int(code))
 	}
 
 	defer C.neko_free_strings(cNames, cCount)
@@ -130,7 +146,7 @@ func Drop(name string) error {
 
 	code := C.neko_drop(cName)
 	if code != 0 {
-		return fmt.Errorf("cannot drop collection '%s': error code %d", name, int(code))
+		return newHairballError("neko_drop", int(code))
 	}
 
 	return nil
@@ -144,7 +160,7 @@ func Stats(name string) (NekoStats, error) {
 	code := C.neko_stats(cName, &stats)
 
 	if code != 0 {
-		return NekoStats{}, fmt.Errorf("cannot get stats for '%s': error code %d", name, int(code))
+		return NekoStats{}, newHairballError("neko_stats", int(code))
 	}
 
 	return NekoStats{
@@ -173,7 +189,7 @@ func Insert(name, id string, vector []float32, metadata string) error {
 
 	code := C.neko_insert(cName, cId, (*C.float)(&vector[0]), C.uint32_t(len(vector)), cMeta)
 	if code != 0 {
-		return fmt.Errorf("cannot insert vector '%s' into '%s': error code %d", id, name, int(code))
+		return newHairballError("neko_insert", int(code))
 	}
 	return nil
 }
@@ -197,7 +213,7 @@ func Upsert(name, id string, vector []float32, metadata string) error {
 
 	code := C.neko_upsert(cName, cId, (*C.float)(&vector[0]), C.uint32_t(len(vector)), cMeta)
 	if code != 0 {
-		return fmt.Errorf("cannot upsert vector '%s' into '%s': error code %d", id, name, int(code))
+		return newHairballError("neko_upsert", int(code))
 	}
 
 	return nil
@@ -213,7 +229,7 @@ func Get(name, id string, dim uint32) ([]float32, error) {
 	vector := make([]float32, dim)
 	code := C.neko_get(cName, cId, (*C.float)(&vector[0]), C.uint32_t(dim))
 	if code != 0 {
-		return nil, fmt.Errorf("cannot get vector '%s' from '%s': error code %d", id, name, int(code))
+		return nil, newHairballError("neko_get", int(code))
 	}
 
 	return vector, nil
@@ -228,7 +244,7 @@ func Delete(name, id string) error {
 
 	code := C.neko_delete(cName, cId)
 	if code != 0 {
-		return fmt.Errorf("cannot delete vector '%s' from '%s': error code %d", id, name, int(code))
+		return newHairballError("neko_delete", int(code))
 	}
 
 	return nil
@@ -244,7 +260,7 @@ func Search(name string, query []float32, topK uint32) ([]NekoSearchResult, erro
 	var result C.NekoSearchResult
 	code := C.neko_search(cName, (*C.float)(&query[0]), C.uint32_t(len(query)), C.uint32_t(topK), &result)
 	if code != 0 {
-		return nil, fmt.Errorf("search failed: error code %d", int(code))
+		return nil, newHairballError("neko_search", int(code))
 	}
 	defer C.neko_free_result(&result)
 	total := int(result.total)

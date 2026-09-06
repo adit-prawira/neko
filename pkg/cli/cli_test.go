@@ -395,3 +395,52 @@ func TestDeleteCommandNonexistentCollection(t *testing.T) {
 		t.Error("expected error for deleting from nonexistent collection")
 	}
 }
+
+func TestServeCommandRegistered(t *testing.T) {
+	root := NewRootCommand()
+
+	found := false
+	for _, subcommand := range root.Commands() {
+		if subcommand.Use == "serve" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'serve' subcommand to be registered")
+	}
+}
+
+func TestServeCommandPortDefault(t *testing.T) {
+	root := NewRootCommand()
+
+	serveCommand, _, err := root.Find([]string{"serve"})
+	if err != nil {
+		t.Fatalf("expected serve command to exist: %v", err)
+	}
+
+	portFlag := serveCommand.Flags().Lookup("port")
+	if portFlag == nil {
+		t.Fatal("expected 'port' flag on serve command")
+	}
+	if portFlag.DefValue != "3434" {
+		t.Errorf("expected port default 3434, got %q", portFlag.DefValue)
+	}
+}
+
+func TestServeCommandDataDirFlag(t *testing.T) {
+	root := NewRootCommand()
+
+	serveCommand, _, err := root.Find([]string{"serve"})
+	if err != nil {
+		t.Fatalf("expected serve command to exist: %v", err)
+	}
+
+	dataDirFlag := serveCommand.Flags().Lookup("data-dir")
+	if dataDirFlag == nil {
+		t.Fatal("expected 'data-dir' flag on serve command")
+	}
+	if dataDirFlag.DefValue == "" {
+		t.Error("expected non-empty default for 'data-dir' flag")
+	}
+}

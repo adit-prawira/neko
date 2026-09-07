@@ -1,6 +1,7 @@
 package ffi
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -381,7 +382,15 @@ func TestSearchEmptyQuery(t *testing.T) {
 
 	_, err := Search("go_test_search_eq", []float32{}, 5)
 	if err == nil {
-		t.Error("expected error for empty query")
+		t.Fatal("expected error for empty query")
+	}
+
+	var hairballError *HairballError
+	if !errors.As(err, &hairballError) {
+		t.Fatalf("expected *HairballError, got %T: %v", err, err)
+	}
+	if hairballError.Code != 5 {
+		t.Errorf("expected hairball code 5 (DimTooSmall), got %d", hairballError.Code)
 	}
 }
 

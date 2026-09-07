@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"unsafe"
+
+	"github.com/adit-prawira/neko/internal/shared"
 )
 
 const (
@@ -252,7 +254,7 @@ func Delete(name, id string) error {
 
 func Search(name string, query []float32, topK uint32) ([]NekoSearchResult, error) {
 	if len(query) == 0 {
-		return nil, fmt.Errorf("query must not be empty")
+		return nil, newHairballError("neko_search", shared.HairballDimTooSmall.Int())
 	}
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))

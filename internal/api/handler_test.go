@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -312,6 +313,262 @@ func TestHandleDropCollection(t *testing.T) {
 		}
 		if code := errorCode(t, recorder); code != "HAIRBALL_NOT_FOUND" {
 			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+}
+
+func TestHandleSearchCollection(t *testing.T) {
+	t.Run("given valid query, then returns ranked top-K with scores", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_l2"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "far", []float32{10.0, 0.0, 0.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+		if err := ffi.Insert(name, "near", []float32{2.0, 0.0, 0.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+		if err := ffi.Insert(name, "mid", []float32{5.0, 0.0, 0.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector":[1.0,0.0,0.0],"top_k":2}`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		body := decodeResponse(t, recorder)
+		results, ok := body["results"].([]any)
+		if !ok {
+			t.Fatalf("expected results array, got %v", body)
+		}
+		if len(results) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(results))
+		}
+		first, ok := results[0].(map[string]any)
+		if !ok {
+			t.Fatalf("expected first result to be an object, got %T", results[0])
+		}
+		if first["id"] != "near" {
+			t.Errorf("expected first id 'near' (L2 distance 1 from query), got %v", first["id"])
+		}
+		second, ok := results[1].(map[string]any)
+		if !ok {
+			t.Fatalf("expected second result to be an object, got %T", results[1])
+		}
+		if second["id"] != "mid" {
+			t.Errorf("expected second id 'mid' (L2 distance 4), got %v", second["id"])
+		}
+	})
+
+	t.Run("given empty collection, then returns 200 with empty results", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_empty"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector":[1.0,0.0,0.0],"top_k":10}`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		body := decodeResponse(t, recorder)
+		results, ok := body["results"].([]any)
+		if !ok {
+			t.Fatalf("expected results array, got %v", body)
+		}
+		if len(results) != 0 {
+			t.Errorf("expected 0 results for empty collection, got %d", len(results))
+		}
+	})
+
+	t.Run("given top_k larger than collection size, then returns all available", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_topk_large"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "near", []float32{2.0, 0.0, 0.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+		if err := ffi.Insert(name, "far", []float32{10.0, 0.0, 0.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector":[1.0,0.0,0.0],"top_k":10}`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		body := decodeResponse(t, recorder)
+		results, ok := body["results"].([]any)
+		if !ok {
+			t.Fatalf("expected results array, got %v", body)
+		}
+		if len(results) != 2 {
+			t.Errorf("expected 2 results (all available), got %d", len(results))
+		}
+	})
+
+	t.Run("given missing collection, then returns 404 with HAIRBALL_NOT_FOUND", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_missing_clowder"
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector":[1.0,0.0,0.0],"top_k":10}`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected status 404, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_NOT_FOUND" {
+			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+
+	t.Run("given vector dim mismatch, then returns 400 with HAIRBALL_DIM_MISMATCH", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_dim_mismatch"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector":[1.0,0.0],"top_k":10}`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_DIM_MISMATCH" {
+			t.Errorf("expected HAIRBALL_DIM_MISMATCH, got %s", code)
+		}
+	})
+
+	t.Run("given empty vector, then returns 400 with HAIRBALL_DIM_TOO_SMALL", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_empty_vector"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector":[],"top_k":10}`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_DIM_TOO_SMALL" {
+			t.Errorf("expected HAIRBALL_DIM_TOO_SMALL, got %s", code)
+		}
+	})
+
+	t.Run("given missing top_k field, then defaults to 10", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_default_topk"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		for index := range 11 {
+			id := "vec_" + strconv.Itoa(index)
+			if err := ffi.Insert(name, id, []float32{float32(index), 0.0, 0.0}, ""); err != nil {
+				t.Fatalf("insert failed: %v", err)
+			}
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector":[1.0,0.0,0.0]}`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		body := decodeResponse(t, recorder)
+		results, ok := body["results"].([]any)
+		if !ok {
+			t.Fatalf("expected results array, got %v", body)
+		}
+		if len(results) != 10 {
+			t.Errorf("expected 10 results (default top_k), got %d", len(results))
+		}
+	})
+
+	t.Run("given explicit top_k zero, then returns empty results", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_explicit_zero"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "near", []float32{2.0, 0.0, 0.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector":[1.0,0.0,0.0],"top_k":0}`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		body := decodeResponse(t, recorder)
+		results, ok := body["results"].([]any)
+		if !ok {
+			t.Fatalf("expected results array, got %v", body)
+		}
+		if len(results) != 0 {
+			t.Errorf("expected 0 results for explicit top_k=0, got %d", len(results))
+		}
+	})
+
+	t.Run("given malformed JSON body, then returns 400", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_search_malformed"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/search", strings.NewReader(`{"vector": [unclosed`))
+		request.SetPathValue("name", name)
+
+		server.HandleSearchCollection(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
 		}
 	})
 }

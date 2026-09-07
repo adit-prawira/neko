@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/adit-prawira/neko/internal/ffi"
+	"github.com/adit-prawira/neko/internal/shared"
 )
 
 type Server struct {
@@ -30,7 +31,7 @@ func (s *Server) ShutDown() error {
 
 func (s *Server) HandleHealth(rw http.ResponseWriter, r *http.Request) {
 	if !s.isEngineReady.Load() {
-		WriteHairball(rw, http.StatusServiceUnavailable, HairballInternalError.String(), "engine not initialised")
+		WriteHairball(rw, http.StatusServiceUnavailable, shared.HairballInternalError.String(), "engine not initialised")
 		return
 	}
 	WriteJSON(rw, http.StatusOK, map[string]string{
@@ -53,11 +54,11 @@ type CreateCollectionResponseHttpDTO struct {
 func (s *Server) HandleCreateCollection(rw http.ResponseWriter, r *http.Request) {
 	var body CreateCollectionRequestHttpDTO
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		WriteHairball(rw, http.StatusBadRequest, HairballInvalidName.String(), "invalid request body")
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "invalid request body")
 		return
 	}
 	if body.Name == "" {
-		WriteHairball(rw, http.StatusBadRequest, HairballInvalidName.String(), "name is required")
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "name is required")
 		return
 	}
 
@@ -67,7 +68,7 @@ func (s *Server) HandleCreateCollection(rw http.ResponseWriter, r *http.Request)
 
 	metricCode, err := ffi.ParseMetric(body.Metric)
 	if err != nil {
-		WriteHairball(rw, http.StatusBadRequest, HairballInvalidMetric.String(), err.Error())
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidMetric.String(), err.Error())
 		return
 	}
 
@@ -148,4 +149,52 @@ func (s *Server) HandleDropCollection(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	rw.WriteHeader(http.StatusNoContent)
+}
+
+type SearchQueryParamsHttpDTO struct {
+	Vector []float32       `json:"vector"`
+	TopK   *uint32         `json:"top_k"`
+	Filter json.RawMessage `json:"filter,omitempty"`
+}
+
+type ScoredResultHttpDTO struct {
+	ID    string  `json:"id"`
+	Score float32 `json:"score"`
+}
+
+type SearchResponseHttpDTO struct {
+	Results []ScoredResultHttpDTO `json:"results"`
+}
+
+const defaultTopK uint32 = 10
+
+func (s *Server) HandleSearchCollection(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body SearchQueryParamsHttpDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "invalid request body")
+		return
+	}
+
+	topK := defaultTopK
+	if body.TopK != nil {
+		topK = *body.TopK
+	}
+
+	results, err := ffi.Search(name, body.Vector, topK)
+	if err != nil {
+		WriteFFIError(rw, err)
+		return
+	}
+
+	scored_results := make([]ScoredResultHttpDTO, 0, len(results))
+	for _, result := range results {
+		scored_results = append(scored_results, ScoredResultHttpDTO{
+			ID:    result.ID,
+			Score: result.Score,
+		})
+	}
+	WriteJSON(rw, http.StatusOK, SearchResponseHttpDTO{
+		Results: scored_results,
+	})
 }

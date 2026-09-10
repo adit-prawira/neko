@@ -208,12 +208,12 @@ pub unsafe extern "C" fn neko_insert(name: *const c_char, id: *const c_char, vec
 
     let raw_metadata_string = unsafe { c_str_to_string(metadata) };
     let vector_metadata: VectorMetadata = match raw_metadata_string {
-        Some(string) if !string.is_empty() => serde_json::from_str::<VectorMetadata>(&string).unwrap_or(VectorMetadata {
+        Some(string) if !string.is_empty() => VectorMetadata {
             id: id_str.clone(),
             created_at: 0,
             deleted: false,
-            custom: String::new(),
-        }),
+            custom: string,
+        },
         _ => VectorMetadata {
             id: id_str.clone(),
             created_at: 0,

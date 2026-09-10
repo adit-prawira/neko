@@ -79,6 +79,7 @@ impl Engine {
                     metric: manifest.metric,
                     model: manifest.model,
                     vectors: Mutex::new(HashMap::new()),
+                    metadata: Mutex::new(HashMap::new()),
                 }),
             );
         }
@@ -90,9 +91,13 @@ impl Engine {
             match entry.operation_code {
                 crate::wal::resource::OperationCode::Insert => {
                     clowder.vectors.lock().unwrap().insert(entry.id.clone(), entry.vector.clone());
+                    if !entry.metadata.custom.is_empty() {
+                        clowder.metadata.lock().unwrap().insert(entry.id.clone(), entry.metadata.custom.clone());
+                    }
                 }
                 crate::wal::resource::OperationCode::Delete => {
                     clowder.vectors.lock().unwrap().remove(&entry.id);
+                    clowder.metadata.lock().unwrap().remove(&entry.id);
                 }
             }
         }
@@ -140,6 +145,7 @@ impl Engine {
                 metric: payload.metric,
                 model: payload.model.map(|model| model.to_string()),
                 vectors: Mutex::new(HashMap::new()),
+                metadata: Mutex::new(HashMap::new()),
             }),
         );
         Ok(())
@@ -199,6 +205,12 @@ impl Engine {
             wal.append_insert(&wal_id, &normalised_vector, metadata)?;
         }
         clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector);
+        let has_custom_metadata = !metadata.custom.is_empty();
+        if has_custom_metadata {
+            clowder.metadata.lock().unwrap().insert(id.to_string(), metadata.custom.clone());
+        } else {
+            clowder.metadata.lock().unwrap().remove(id);
+        }
         Ok(())
     }
 
@@ -246,6 +258,7 @@ impl Engine {
             wal.append_delete(&wal_id)?;
         }
         clowder.vectors.lock().unwrap().remove(id);
+        clowder.metadata.lock().unwrap().remove(id);
         Ok(())
     }
 
@@ -918,5 +931,115 @@ mod tests {
         let results = engine.search("pts", &[0.0, 0.0], 2).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "keep");
+    }
+
+    #[test]
+    fn given_insert_with_non_empty_custom_metadata_then_metadata_map_stores_value() {
+        let dir = temp_dir("engine_insert_meta_store");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: "{\"author\":\"alice\"}".to_string(),
+        };
+
+        engine.insert_vector("docs", "doc1", vector, &metadata).unwrap();
+
+        let clowder = engine.clowders.get("docs").unwrap();
+        let stored = clowder.metadata.lock().unwrap();
+        assert_eq!(stored.get("doc1"), Some(&"{\"author\":\"alice\"}".to_string()));
+    }
+
+    #[test]
+    fn given_reinsert_with_empty_custom_metadata_then_metadata_map_removes_id() {
+        let dir = temp_dir("engine_reinsert_empty_meta");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+
+        // First insert with metadata present.
+        let with_metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: "first".to_string(),
+        };
+        engine.insert_vector("docs", "doc1", vector.clone(), &with_metadata).unwrap();
+
+        // Precondition: metadata must be in the map after the first insert.
+        {
+            let clowder = engine.clowders.get("docs").unwrap();
+            let stored = clowder.metadata.lock().unwrap();
+            assert_eq!(stored.get("doc1"), Some(&"first".to_string()));
+        }
+
+        // Re-insert the same id with empty custom — the previous metadata
+        // entry must be cleared, not retained.
+        let without_metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("docs", "doc1", vector, &without_metadata).unwrap();
+
+        let clowder = engine.clowders.get("docs").unwrap();
+        let stored = clowder.metadata.lock().unwrap();
+        assert!(!stored.contains_key("doc1"));
+    }
+
+    #[test]
+    fn given_delete_then_metadata_map_clears_id() {
+        let dir = temp_dir("engine_delete_meta_clear");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: "anything".to_string(),
+        };
+        engine.insert_vector("docs", "doc1", vector, &metadata).unwrap();
+
+        // Precondition: metadata must be in the map after insert.
+        {
+            let clowder = engine.clowders.get("docs").unwrap();
+            let stored = clowder.metadata.lock().unwrap();
+            assert_eq!(stored.get("doc1"), Some(&"anything".to_string()));
+        }
+
+        engine.delete_vector("docs", "doc1").unwrap();
+
+        let clowder = engine.clowders.get("docs").unwrap();
+        let stored = clowder.metadata.lock().unwrap();
+        assert!(!stored.contains_key("doc1"));
     }
 }

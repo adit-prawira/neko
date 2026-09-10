@@ -176,7 +176,7 @@ func Stats(name string) (NekoStats, error) {
 
 func Insert(name, id string, vector []float32, metadata string) error {
 	if len(vector) == 0 {
-		return fmt.Errorf("vector must not be empty")
+		return newHairballError("neko_insert", shared.HairballDimTooSmall.Int())
 	}
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
@@ -198,7 +198,7 @@ func Insert(name, id string, vector []float32, metadata string) error {
 
 func Upsert(name, id string, vector []float32, metadata string) error {
 	if len(vector) == 0 {
-		return fmt.Errorf("vector must not be empty")
+		return newHairballError("neko_upsert", shared.HairballDimTooSmall.Int())
 	}
 
 	cName := C.CString(name)

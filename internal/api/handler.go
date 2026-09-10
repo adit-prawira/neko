@@ -198,3 +198,38 @@ func (s *Server) HandleSearchCollection(rw http.ResponseWriter, r *http.Request)
 		Results: scored_results,
 	})
 }
+
+type InsertVectorHttpDTO struct {
+	ID       string    `json:"id"`
+	Vector   []float32 `json:"vector"`
+	Metadata string    `json:"metadata"`
+}
+
+type InsertVectorResponseHttpDTO struct {
+	ID  string `json:"id"`
+	Dim int    `json:"dim"`
+}
+
+func (s *Server) HandleInsertVector(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body InsertVectorHttpDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "invalid request body")
+		return
+	}
+
+	if body.ID == "" {
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "id is required")
+		return
+	}
+
+	if err := ffi.Insert(name, body.ID, body.Vector, body.Metadata); err != nil {
+		WriteFFIError(rw, err)
+		return
+	}
+
+	WriteJSON(rw, http.StatusCreated, InsertVectorResponseHttpDTO{
+		ID:  body.ID,
+		Dim: len(body.Vector),
+	})
+}

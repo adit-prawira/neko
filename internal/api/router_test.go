@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/adit-prawira/neko/internal/ffi"
 )
 
 func routerTestSetup(t *testing.T) *Server {
@@ -55,6 +57,46 @@ func TestSearchRoute(t *testing.T) {
 
 		if recorder.Code == http.StatusOK {
 			t.Errorf("expected non-200 for wrong method, got %d", recorder.Code)
+		}
+	})
+}
+
+func TestInsertVectorRoute(t *testing.T) {
+	t.Run("given POST through mux, then dispatches to handler and returns 201 for valid insert", func(t *testing.T) {
+		// Creating the collection first ensures the handler (not the catchall)
+		// is invoked. If the route were unregistered, the catchall would return
+		// 404 HAIRBALL_NOT_FOUND with a 'is not found' message.
+		server := routerTestSetup(t)
+		name := "router_test_insert_route"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		handler := buildRoutes(server)
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", strings.NewReader(`{"id":"doc1","vector":[1.0,0.0,0.0]}`))
+
+		handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("expected 201 (route dispatched to handler), got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("given GET on insert endpoint, then falls through to catchall and returns 404", func(t *testing.T) {
+		// Pattern 'POST /v1/collections/{name}/vectors' only matches POST.
+		// A GET request to the same path falls through to the catchall.
+		server := routerTestSetup(t)
+		handler := buildRoutes(server)
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/v1/collections/some_name/vectors", nil)
+
+		handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("expected 404 (GET on POST-only route), got %d", recorder.Code)
 		}
 	})
 }

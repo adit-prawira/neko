@@ -13,4 +13,5 @@ pub struct Clowder {
     pub metric: u8,
     pub model: Option<String>,
     pub vectors: Mutex<HashMap<String, Vec<f32>>>,
+    pub metadata: Mutex<HashMap<String, String>>,
 }

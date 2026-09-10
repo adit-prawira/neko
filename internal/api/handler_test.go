@@ -572,3 +572,183 @@ func TestHandleSearchCollection(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleInsertVector(t *testing.T) {
+	t.Run("given valid body, then returns 201 with id and dim echo", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_insert_happy"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`{"id":"doc1","vector":[1.0,2.0,3.0]}`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertVector(recorder, request)
+
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		response := decodeResponse(t, recorder)
+		if response["id"] != "doc1" {
+			t.Errorf("expected id 'doc1', got %v", response["id"])
+		}
+		if response["dim"] != float64(3) {
+			t.Errorf("expected dim 3, got %v", response["dim"])
+		}
+	})
+
+	t.Run("given valid body with metadata, then returns 201 and accepts metadata field", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_insert_with_metadata"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 2, ffi.MetricCosine, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`{"id":"doc1","vector":[1.0,0.0],"metadata":"{\"author\":\"alice\"}"}`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertVector(recorder, request)
+
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("given missing id, then returns 400 with HAIRBALL_INVALID_NAME", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_insert_no_id"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`{"vector":[1.0,2.0,3.0]}`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_INVALID_NAME" {
+			t.Errorf("expected HAIRBALL_INVALID_NAME, got %s", code)
+		}
+	})
+
+	t.Run("given empty id string, then returns 400 with HAIRBALL_INVALID_NAME", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_insert_empty_id"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`{"id":"","vector":[1.0,2.0,3.0]}`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_INVALID_NAME" {
+			t.Errorf("expected HAIRBALL_INVALID_NAME, got %s", code)
+		}
+	})
+
+	t.Run("given vector dim mismatch with collection, then returns 400 with HAIRBALL_DIM_MISMATCH", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_insert_dim_mismatch"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`{"id":"doc1","vector":[1.0,2.0]}`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_DIM_MISMATCH" {
+			t.Errorf("expected HAIRBALL_DIM_MISMATCH, got %s", code)
+		}
+	})
+
+	t.Run("given missing collection, then returns 404 with HAIRBALL_NOT_FOUND", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_insert_no_clowder"
+
+		body := strings.NewReader(`{"id":"doc1","vector":[1.0,2.0,3.0]}`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertVector(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected status 404, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_NOT_FOUND" {
+			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+
+	t.Run("given empty vector, then returns 400 with HAIRBALL_DIM_TOO_SMALL", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_insert_empty_vec"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`{"id":"doc1","vector":[]}`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_DIM_TOO_SMALL" {
+			t.Errorf("expected HAIRBALL_DIM_TOO_SMALL, got %s", code)
+		}
+	})
+
+	t.Run("given malformed JSON body, then returns 400", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_insert_malformed"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`{"id": "unclosed`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+}

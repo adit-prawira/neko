@@ -14,6 +14,11 @@ typedef struct {
   float *scores;
 } NekoSearchResult;
 
+
+typedef struct {
+  char *metadata;
+} NekoMetadata;
+
 int32_t neko_version(void);
 int32_t neko_init(const char *data_directory);
 int32_t neko_shutdown(void);
@@ -26,5 +31,8 @@ int32_t neko_get(const char *name, const char *id, float *vector, uint32_t dim);
 int32_t neko_search(const char *name, const float *query, uint32_t dim, uint32_t top_k, NekoSearchResult *results);
 int32_t neko_delete(const char *name, const char *id);
 int32_t neko_upsert(const char *name, const char *id, const float *vector, uint32_t len, const char *metadata);
+int32_t neko_get_vector(const char *name, const char *id, float *vector_out, uint32_t dim, NekoMetadata *metadata_out);
+
+void neko_free_metadata(NekoMetadata *metadata);
 void neko_free_strings(char **strings, uint32_t count);
 void neko_free_result(NekoSearchResult *results);

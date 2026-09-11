@@ -19,3 +19,9 @@ pub struct NekoSearchResult {
     pub ids: *mut *mut std::ffi::c_char,
     pub scores: *mut f32,
 }
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct NekoMetadata {
+    pub metadata: *mut std::ffi::c_char,
+}

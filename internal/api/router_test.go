@@ -144,3 +144,43 @@ func TestGetVectorRoute(t *testing.T) {
 		}
 	})
 }
+
+func TestUpsertVectorRoute(t *testing.T) {
+	t.Run("given PUT through mux, then dispatches to handler and returns 201 for new vector", func(t *testing.T) {
+		// Creating the collection first ensures the handler (not the catchall)
+		// is invoked. If the route were unregistered, the catchall would return
+		// 404 HAIRBALL_NOT_FOUND with a 'is not found' message.
+		server := routerTestSetup(t)
+		name := "router_test_upsert_route"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		handler := buildRoutes(server)
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/v1/collections/"+name+"/vectors/doc1", strings.NewReader(`{"vector":[1.0,0.0,0.0]}`))
+
+		handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("expected 201 (route dispatched to handler), got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("given GET on upsert endpoint, then falls through to catchall and returns 404", func(t *testing.T) {
+		// Pattern 'PUT /v1/collections/{name}/vectors/{id}' only matches PUT.
+		// A GET request to the same path falls through to the catchall.
+		server := routerTestSetup(t)
+		handler := buildRoutes(server)
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/v1/collections/some_name/vectors/doc1", nil)
+
+		handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("expected 404 (GET on PUT-only route), got %d", recorder.Code)
+		}
+	})
+}

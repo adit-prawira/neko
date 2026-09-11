@@ -196,9 +196,9 @@ func Insert(name, id string, vector []float32, metadata string) error {
 	return nil
 }
 
-func Upsert(name, id string, vector []float32, metadata string) error {
+func Upsert(name, id string, vector []float32, metadata string) (bool, error) {
 	if len(vector) == 0 {
-		return newHairballError("neko_upsert", shared.HairballDimTooSmall.Int())
+		return false, newHairballError("neko_upsert", shared.HairballDimTooSmall.Int())
 	}
 
 	cName := C.CString(name)
@@ -213,12 +213,12 @@ func Upsert(name, id string, vector []float32, metadata string) error {
 		defer C.free(unsafe.Pointer(cMeta))
 	}
 
-	code := C.neko_upsert(cName, cId, (*C.float)(&vector[0]), C.uint32_t(len(vector)), cMeta)
+	var cCreated C.uint8_t
+	code := C.neko_upsert(cName, cId, (*C.float)(&vector[0]), C.uint32_t(len(vector)), cMeta, &cCreated)
 	if code != 0 {
-		return newHairballError("neko_upsert", int(code))
+		return false, newHairballError("neko_upsert", int(code))
 	}
-
-	return nil
+	return cCreated == 1, nil
 }
 
 func Get(name, id string, dim uint32) ([]float32, error) {

@@ -174,6 +174,10 @@ with 384 dimensions.
 #[no_mangle] pub extern "C" fn neko_insert(name: *const c_char, id: *const c_char,
                                              vector: *const f32, len: u32,
                                              metadata: *const c_char) -> i32;
+// dim = collection dim (output vector must be pre-allocated)
+#[no_mangle] pub extern "C" fn neko_get_vector(name: *const c_char, id: *const c_char,
+                                                 vector_out: *mut f32, dim: u32,
+                                                 metadata_out: *mut NekoMetadata) -> i32;
 // lens[i] = number of f32 elements in vectors[i] (must equal collection dim)
 #[no_mangle] pub extern "C" fn neko_batch_insert(name: *const c_char,
                                                    ids: *const *const c_char,
@@ -196,6 +200,7 @@ with 384 dimensions.
 // — Memory —
 #[no_mangle] pub extern "C" fn neko_free_result(results: *mut NekoResult);
 #[no_mangle] pub extern "C" fn neko_free_strings(strings: *mut *mut c_char, count: u32);
+#[no_mangle] pub extern "C" fn neko_free_metadata(metadata: *mut NekoMetadata);
 
 // — Embeddings (Phase 2+) —
 #[no_mangle] pub extern "C" fn neko_embed(model_name: *const c_char,

@@ -199,20 +199,20 @@ func (s *Server) HandleSearchCollection(rw http.ResponseWriter, r *http.Request)
 	})
 }
 
-type InsertVectorHttpDTO struct {
+type UpsertVectorHttpDTO struct {
 	ID       string    `json:"id"`
 	Vector   []float32 `json:"vector"`
 	Metadata string    `json:"metadata"`
 }
 
-type InsertVectorResponseHttpDTO struct {
+type UpsertVectorResponseHttpDTO struct {
 	ID  string `json:"id"`
 	Dim int    `json:"dim"`
 }
 
 func (s *Server) HandleInsertVector(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	var body InsertVectorHttpDTO
+	var body UpsertVectorHttpDTO
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "invalid request body")
 		return
@@ -228,7 +228,7 @@ func (s *Server) HandleInsertVector(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteJSON(rw, http.StatusCreated, InsertVectorResponseHttpDTO{
+	WriteJSON(rw, http.StatusCreated, UpsertVectorResponseHttpDTO{
 		ID:  body.ID,
 		Dim: len(body.Vector),
 	})
@@ -260,5 +260,37 @@ func (s *Server) HandleGetVector(rw http.ResponseWriter, r *http.Request) {
 		ID:       id,
 		Vector:   vector,
 		Metadata: metadata,
+	})
+}
+
+func (s *Server) HandleUpsertVector(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	id := r.PathValue("id")
+
+	var body UpsertVectorHttpDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "invalid request body")
+		return
+	}
+
+	if id == "" {
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "id is required")
+		return
+	}
+
+	created, err := ffi.Upsert(name, id, body.Vector, body.Metadata)
+	if err != nil {
+		WriteFFIError(rw, err)
+		return
+	}
+
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+
+	WriteJSON(rw, status, UpsertVectorResponseHttpDTO{
+		ID:  id,
+		Dim: len(body.Vector),
 	})
 }

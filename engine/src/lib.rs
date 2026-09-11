@@ -237,9 +237,14 @@ pub unsafe extern "C" fn neko_insert(name: *const c_char, id: *const c_char, vec
 /// Upsert (insert-or-update) a vector into a collection.
 ///
 /// # Safety
-/// `name` and `id` must be valid, null-terminated C strings. `vector` must point to `len` valid f32 values. `metadata` may be null.
+/// name and id must be valid, null-terminated C strings.
+/// vector must point to len of valid f32 values.
+/// metadata may be null
+/// created may be null.
+///     - If non-null, then it must point to writable memory and receives 1 if vector was newly created
+///     - Otherwise, 0 if it was updated
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neko_upsert(name: *const c_char, id: *const c_char, vector: *const f32, len: u32, metadata: *const c_char) -> c_int {
+pub unsafe extern "C" fn neko_upsert(name: *const c_char, id: *const c_char, vector: *const f32, len: u32, metadata: *const c_char, created: *mut u8) -> c_int {
     let raw_name_string = unsafe { c_str_to_string(name) };
     let name_str = match raw_name_string {
         Some(string) => string,
@@ -277,10 +282,25 @@ pub unsafe extern "C" fn neko_upsert(name: *const c_char, id: *const c_char, vec
         None => return Hairball::InternalError as c_int,
     };
     let vector_slice = unsafe { std::slice::from_raw_parts(vector, len as usize) };
-    match engine.write().unwrap().upsert_vector(&name_str, &id_str, vector_slice.to_vec(), &vector_metadata) {
-        Ok(_) => 0,
-        Err(err) => err as c_int,
+
+    let was_created = {
+        let clowder = match engine.read().unwrap().clowders.get(&name_str) {
+            Some(clowder) => clowder.clone(),
+            None => return Hairball::NotFound as c_int,
+        };
+        let is_existed = clowder.vectors.lock().unwrap().contains_key(&id_str);
+        match engine.write().unwrap().upsert_vector(&name_str, &id_str, vector_slice.to_vec(), &vector_metadata) {
+            Ok(_) => !is_existed,
+            Err(err) => return err as c_int,
+        }
+    };
+
+    if !created.is_null() {
+        unsafe {
+            *created = was_created as u8;
+        }
     }
+    0
 }
 
 /// Retrieve a vector by ID from a collection.
@@ -785,7 +805,7 @@ mod tests {
         let result = unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
         assert_eq!(result, 0);
 
-        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(result, 0);
 
         let mut out = vec![0.0_f32; 3];
@@ -808,7 +828,7 @@ mod tests {
         unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
 
         unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), first.as_ptr(), 3, std::ptr::null()) };
-        unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), second.as_ptr(), 3, std::ptr::null()) };
+        unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), second.as_ptr(), 3, std::ptr::null(), std::ptr::null_mut()) };
 
         let mut out = vec![0.0_f32; 3];
         unsafe { neko_get(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3) };
@@ -826,7 +846,7 @@ mod tests {
 
         unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
 
-        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 2, std::ptr::null()) };
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 2, std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(result, Hairball::DimMismatch as i32);
     }
 
@@ -838,7 +858,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 3] = [1.0, 2.0, 3.0];
 
-        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(result, Hairball::NotFound as i32);
     }
 
@@ -851,7 +871,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
 
-        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), std::ptr::null(), 3, std::ptr::null()) };
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), std::ptr::null(), 3, std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(result, Hairball::DimTooSmall as i32);
     }
 
@@ -1088,5 +1108,74 @@ mod tests {
     #[test]
     fn given_free_metadata_null_then_no_crash() {
         unsafe { neko_free_metadata(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn given_upsert_new_via_ffi_then_created_flag_is_one() {
+        ffi_init();
+        ffi_cleanup("ffi_test_upsert_created");
+
+        let collection = CString::new("ffi_test_upsert_created").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [1.0, 2.0, 3.0];
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        let mut created: u8 = 0;
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null(), &mut created) };
+        assert_eq!(result, 0);
+        assert_eq!(created, 1, "first upsert of a new vector must report created=1");
+    }
+
+    #[test]
+    fn given_upsert_existing_via_ffi_then_created_flag_is_zero() {
+        ffi_init();
+        ffi_cleanup("ffi_test_upsert_created_zero");
+
+        let collection = CString::new("ffi_test_upsert_created_zero").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let first: [f32; 3] = [1.0, 0.0, 0.0];
+        let second: [f32; 3] = [0.0, 1.0, 0.0];
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), first.as_ptr(), 3, std::ptr::null()) };
+
+        let mut created: u8 = 99;
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), second.as_ptr(), 3, std::ptr::null(), &mut created) };
+        assert_eq!(result, 0);
+        assert_eq!(created, 0, "upsert of an existing vector must report created=0");
+    }
+
+    #[test]
+    fn given_upsert_via_ffi_with_null_created_pointer_then_no_crash() {
+        ffi_init();
+        ffi_cleanup("ffi_test_upsert_null_created");
+
+        let collection = CString::new("ffi_test_upsert_null_created").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [4.0, 5.0, 6.0];
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null(), std::ptr::null_mut()) };
+        assert_eq!(result, 0, "upsert must accept a null created pointer and still succeed");
+    }
+
+    #[test]
+    fn given_upsert_via_ffi_with_metadata_then_created_flag_still_set() {
+        ffi_init();
+        ffi_cleanup("ffi_test_upsert_meta_created");
+
+        let collection = CString::new("ffi_test_upsert_meta_created").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [7.0, 8.0, 9.0];
+        let metadata = CString::new(r#"{"author":"alice"}"#).unwrap();
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        let mut created: u8 = 0;
+        let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, metadata.as_ptr(), &mut created) };
+        assert_eq!(result, 0);
+        assert_eq!(created, 1, "metadata must not affect the created flag");
     }
 }

@@ -236,6 +236,12 @@ impl Engine {
             wal.append_insert(&wal_id, &normalised_vector, metadata)?;
         }
         clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector);
+        let has_custom_metadata = !metadata.custom.is_empty();
+        if has_custom_metadata {
+            clowder.metadata.lock().unwrap().insert(id.to_string(), metadata.custom.clone());
+        } else {
+            clowder.metadata.lock().unwrap().remove(id);
+        }
         Ok(())
     }
 
@@ -1037,6 +1043,112 @@ mod tests {
         }
 
         engine.delete_vector("docs", "doc1").unwrap();
+
+        let clowder = engine.clowders.get("docs").unwrap();
+        let stored = clowder.metadata.lock().unwrap();
+        assert!(!stored.contains_key("doc1"));
+    }
+
+    #[test]
+    fn given_upsert_with_non_empty_custom_metadata_then_metadata_map_stores_value() {
+        let dir = temp_dir("engine_upsert_meta_store");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: "{\"author\":\"alice\"}".to_string(),
+        };
+
+        engine.upsert_vector("docs", "doc1", vector, &metadata).unwrap();
+
+        let clowder = engine.clowders.get("docs").unwrap();
+        let stored = clowder.metadata.lock().unwrap();
+        assert_eq!(stored.get("doc1"), Some(&"{\"author\":\"alice\"}".to_string()));
+    }
+
+    #[test]
+    fn given_upsert_replaces_existing_metadata_then_metadata_map_value_updated() {
+        let dir = temp_dir("engine_upsert_meta_replace");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let first_metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: "first".to_string(),
+        };
+        engine.upsert_vector("docs", "doc1", vector.clone(), &first_metadata).unwrap();
+
+        let second_metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: "second".to_string(),
+        };
+        engine.upsert_vector("docs", "doc1", vector, &second_metadata).unwrap();
+
+        let clowder = engine.clowders.get("docs").unwrap();
+        let stored = clowder.metadata.lock().unwrap();
+        assert_eq!(stored.get("doc1"), Some(&"second".to_string()));
+    }
+
+    #[test]
+    fn given_upsert_with_empty_custom_metadata_then_metadata_map_removes_id() {
+        let dir = temp_dir("engine_upsert_meta_clear");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let vector = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let with_metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: "anything".to_string(),
+        };
+        engine.upsert_vector("docs", "doc1", vector.clone(), &with_metadata).unwrap();
+
+        // Precondition: metadata must be in the map after the first upsert.
+        {
+            let clowder = engine.clowders.get("docs").unwrap();
+            let stored = clowder.metadata.lock().unwrap();
+            assert_eq!(stored.get("doc1"), Some(&"anything".to_string()));
+        }
+
+        // Upsert with empty custom — the previous metadata entry must be cleared.
+        let without_metadata = VectorMetadata {
+            id: "doc1".to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.upsert_vector("docs", "doc1", vector, &without_metadata).unwrap();
 
         let clowder = engine.clowders.get("docs").unwrap();
         let stored = clowder.metadata.lock().unwrap();

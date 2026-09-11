@@ -229,7 +229,7 @@ func newUpsertCmd() *cobra.Command {
 			}
 
 			floats := unsafe.Slice((*float32)(unsafe.Pointer(&data[0])), len(data)/4)
-			if err := ffi.Upsert(name, upsertId, floats, ""); err != nil {
+			if _, err := ffi.Upsert(name, upsertId, floats, ""); err != nil {
 				return err
 			}
 

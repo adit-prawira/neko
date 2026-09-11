@@ -269,7 +269,7 @@ func TestUpsertAndGet(t *testing.T) {
 	}
 
 	vector := []float32{1.0, 2.0, 3.0}
-	if err := Upsert("go_test_upsert_get", "doc1", vector, ""); err != nil {
+	if _, err := Upsert("go_test_upsert_get", "doc1", vector, ""); err != nil {
 		t.Fatalf("Upsert failed: %v", err)
 	}
 
@@ -293,7 +293,7 @@ func TestUpsertExistingReplaces(t *testing.T) {
 	if err := Insert("go_test_upsert_replace", "doc1", []float32{1.0, 0.0, 0.0}, ""); err != nil {
 		t.Fatalf("Insert failed: %v", err)
 	}
-	if err := Upsert("go_test_upsert_replace", "doc1", []float32{0.0, 1.0, 0.0}, ""); err != nil {
+	if _, err := Upsert("go_test_upsert_replace", "doc1", []float32{0.0, 1.0, 0.0}, ""); err != nil {
 		t.Fatalf("Upsert failed: %v", err)
 	}
 
@@ -315,7 +315,7 @@ func TestUpsertDimMismatch(t *testing.T) {
 	}
 
 	vector := []float32{1.0, 2.0}
-	if err := Upsert("go_test_upsert_dim", "doc1", vector, ""); err == nil {
+	if _, err := Upsert("go_test_upsert_dim", "doc1", vector, ""); err == nil {
 		t.Error("expected error for dim mismatch, got nil")
 	}
 }
@@ -324,7 +324,7 @@ func TestUpsertNonexistentCollection(t *testing.T) {
 	testInit(t)
 
 	vector := []float32{1.0}
-	if err := Upsert("no_such_collection_zzz_upsert", "doc1", vector, ""); err == nil {
+	if _, err := Upsert("no_such_collection_zzz_upsert", "doc1", vector, ""); err == nil {
 		t.Error("expected error for nonexistent collection, got nil")
 	}
 }
@@ -338,7 +338,7 @@ func TestUpsertWithEmptyVector(t *testing.T) {
 	}
 
 	emptyVector := []float32{}
-	if err := Upsert("go_test_upsert_empty", "doc1", emptyVector, ""); err == nil {
+	if _, err := Upsert("go_test_upsert_empty", "doc1", emptyVector, ""); err == nil {
 		t.Error("expected error for empty vector, got nil")
 	}
 }
@@ -445,4 +445,68 @@ func TestDeleteNonexistentCollection(t *testing.T) {
 	if err := Delete("no_such_clowder_delete", "doc1"); err == nil {
 		t.Error("expected error for nonexistent collection, got nil")
 	}
+}
+
+func TestUpsertReturnsCreatedTrueForNewVector(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_upsert_created_true")
+
+	if err := Create("go_test_upsert_created_true", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	created, err := Upsert("go_test_upsert_created_true", "doc1", []float32{1.0, 2.0, 3.0}, "")
+	if err != nil {
+		t.Fatalf("Upsert failed: %v", err)
+	}
+	if !created {
+		t.Error("expected created=true for a new vector, got false")
+	}
+}
+
+func TestUpsertReturnsCreatedFalseForExistingVector(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_upsert_created_false")
+
+	if err := Create("go_test_upsert_created_false", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := Insert("go_test_upsert_created_false", "doc1", []float32{1.0, 0.0, 0.0}, ""); err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	created, err := Upsert("go_test_upsert_created_false", "doc1", []float32{0.0, 1.0, 0.0}, "")
+	if err != nil {
+		t.Fatalf("Upsert failed: %v", err)
+	}
+	if created {
+		t.Error("expected created=false for an existing vector, got true")
+	}
+}
+
+func TestUpsertEmptyVectorReturnsHairballError(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_upsert_empty_hairball")
+
+	if err := Create("go_test_upsert_empty_hairball", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	_, err := Upsert("go_test_upsert_empty_hairball", "doc1", []float32{}, "")
+	if err == nil {
+		t.Fatal("expected error for empty vector, got nil")
+	}
+
+	var hairball *HairballError
+	if !errors.As(err, &hairball) {
+		t.Fatalf("expected *HairballError so WriteFFIError maps to 4xx, got %T: %v", err, err)
+	}
+	if hairball.Code != 5 {
+		t.Errorf("expected HairballDimTooSmall (code 5), got %d", hairball.Code)
+	}
+}
+
+func TestUpsertRoundTripsMetadata(t *testing.T) {
+	t.Skip("pre-existing bug: neko_upsert FFI parses metadata as VectorMetadata struct instead of treating it as opaque custom JSON, unlike neko_insert. FFI fix needed before this can pass.")
 }

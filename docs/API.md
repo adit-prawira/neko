@@ -91,12 +91,7 @@ Response `200`:
 DELETE /collections/:name
 ```
 
-Response `200`:
-```json
-{
-  "deleted": "docs"
-}
-```
+Response `204` (no body).
 
 ---
 
@@ -124,13 +119,41 @@ POST /collections/:name/vectors
 Response `201`:
 ```json
 {
-  "id": "doc_42"
+  "id": "doc_42",
+  "dim": 384
 }
 ```
 
 ---
 
+### Get Vector
+
+```
+GET /collections/:name/vectors/:id
+```
+
+Response `200`:
+```json
+{
+  "id": "doc_42",
+  "vector": [0.12, -0.34, 0.78, "..."],
+  "metadata": "{\"author\":\"alice\"}"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Echoes the vector ID from the path. |
+| `vector` | [f32] | The stored vector. For cosine collections, this is the unit-normalized version of what was inserted. |
+| `metadata` | string | The raw JSON string that was sent at insert time. Absent (not `null`) if no metadata was attached. |
+
+Response `404` (`HAIRBALL_NOT_FOUND`) if the collection or vector id does not exist.
+
+---
+
 ### Batch Insert Vectors
+
+*Planned — not yet implemented. Will use the same request/response shape shown below; the FFI will require a single `neko_batch_insert` call.*
 
 ```
 POST /collections/:name/vectors/batch
@@ -155,6 +178,8 @@ Response `201`:
 ---
 
 ### Upsert Vector
+
+*Planned — not yet implemented. Will use the response-code split below via a new `neko_upsert_with_status` FFI.*
 
 ```
 PUT /collections/:name/vectors/:id
@@ -212,20 +237,19 @@ Response `200`:
 
 ### Delete Vector
 
+*Planned — not yet implemented. The Rust `Engine::delete_vector` and `neko_delete` FFI already exist; only the REST handler is missing.*
+
 ```
 DELETE /collections/:name/vectors/:id
 ```
 
-Response `200`:
-```json
-{
-  "deleted": "doc_42"
-}
-```
+Response `204` (no body) on success. Response `404` (`HAIRBALL_NOT_FOUND`) if the collection or vector id does not exist.
 
 ---
 
 ## Models
+
+*Planned — Phase 2 (embeddings). Listed here so the full API surface is visible; none of these endpoints exist in v0.1.*
 
 ### List Models
 
@@ -389,6 +413,8 @@ Additional model-specific codes:
 
 ## gRPC
 
+*Planned — not yet implemented. The service definition below shows the intended shape; no `proto/neko.proto` or `internal/api/grpc.go` exists in v0.1.*
+
 The gRPC API mirrors the REST API exactly. Service definition:
 
 ```protobuf
@@ -419,5 +445,4 @@ service Neko {
 - The default data directory is `~/.neko/`. Override with `NEKO_HOME` env var or `--data-dir`.
 - CORS headers are included on all responses (supports browser-based clients).
 - Search results are sorted by score descending for cosine/dot, ascending for L2.
-- Collections are bound to a model at creation time. Text search uses the collection's model.
-- The default model (`all-MiniLM-L6-v2`) is bundled. Other models are downloaded on demand.
+- Collections are bound to a model at creation time. Text search uses the collection's model. (Planned for Phase 2 — the `model` field on collection create is accepted today but not yet enforced.)

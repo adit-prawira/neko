@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -749,6 +750,146 @@ func TestHandleInsertVector(t *testing.T) {
 
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+}
+
+func TestHandleGetVector(t *testing.T) {
+	t.Run("given existing vector with metadata, then returns 200 with id, vector, and metadata", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_get_with_meta"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, `{"author":"alice"}`); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/v1/collections/"+name+"/vectors/doc1", nil)
+		request.SetPathValue("name", name)
+		request.SetPathValue("id", "doc1")
+
+		server.HandleGetVector(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		response := decodeResponse(t, recorder)
+		if response["id"] != "doc1" {
+			t.Errorf("expected id 'doc1', got %v", response["id"])
+		}
+		if metadata, ok := response["metadata"].(string); !ok || metadata != `{"author":"alice"}` {
+			t.Errorf("expected metadata %q, got %v (present=%v)", `{"author":"alice"}`, response["metadata"], ok)
+		}
+	})
+
+	t.Run("given existing vector without metadata, then returns 200 with id and vector only (no metadata field)", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_get_no_meta"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/v1/collections/"+name+"/vectors/doc1", nil)
+		request.SetPathValue("name", name)
+		request.SetPathValue("id", "doc1")
+
+		server.HandleGetVector(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		response := decodeResponse(t, recorder)
+		if _, exists := response["metadata"]; exists {
+			t.Errorf("expected metadata field to be absent (omitempty), got present: %v", response["metadata"])
+		}
+	})
+
+	t.Run("given missing collection, then returns 404 with HAIRBALL_NOT_FOUND", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_get_no_clowder"
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/v1/collections/"+name+"/vectors/doc1", nil)
+		request.SetPathValue("name", name)
+		request.SetPathValue("id", "doc1")
+
+		server.HandleGetVector(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected status 404, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_NOT_FOUND" {
+			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+
+	t.Run("given missing vector id, then returns 404 with HAIRBALL_NOT_FOUND", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_get_no_id"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/v1/collections/"+name+"/vectors/ghost", nil)
+		request.SetPathValue("name", name)
+		request.SetPathValue("id", "ghost")
+
+		server.HandleGetVector(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected status 404, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_NOT_FOUND" {
+			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+
+	t.Run("given cosine metric collection, then returns the cosine-normalized vector (unit length)", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_get_cosine"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricCosine, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/v1/collections/"+name+"/vectors/doc1", nil)
+		request.SetPathValue("name", name)
+		request.SetPathValue("id", "doc1")
+
+		server.HandleGetVector(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		response := decodeResponse(t, recorder)
+		vectorRaw, ok := response["vector"].([]interface{})
+		if !ok {
+			t.Fatalf("expected vector to be []interface{}, got %T: %v", response["vector"], response["vector"])
+		}
+		lengthSquared := 0.0
+		for _, component := range vectorRaw {
+			componentFloat, ok := component.(float64)
+			if !ok {
+				t.Fatalf("expected vector component to be float64, got %T: %v", component, component)
+			}
+			lengthSquared += componentFloat * componentFloat
+		}
+		if math.Abs(lengthSquared-1.0) > 0.0001 {
+			t.Errorf("expected cosine-normalized vector (unit length, length^2 ~= 1.0), got length^2 = %v", lengthSquared)
 		}
 	})
 }

@@ -233,3 +233,32 @@ func (s *Server) HandleInsertVector(rw http.ResponseWriter, r *http.Request) {
 		Dim: len(body.Vector),
 	})
 }
+
+type GetVectorResponseHttpDTO struct {
+	ID       string    `json:"id"`
+	Vector   []float32 `json:"vector"`
+	Metadata string    `json:"metadata,omitempty"`
+}
+
+func (s *Server) HandleGetVector(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	id := r.PathValue("id")
+
+	stats, err := ffi.Stats(name)
+	if err != nil {
+		WriteFFIError(rw, err)
+		return
+	}
+
+	vector, metadata, err := ffi.GetVector(name, id, stats.Dim)
+	if err != nil {
+		WriteFFIError(rw, err)
+		return
+	}
+
+	WriteJSON(rw, http.StatusOK, GetVectorResponseHttpDTO{
+		ID:       id,
+		Vector:   vector,
+		Metadata: metadata,
+	})
+}

@@ -4,7 +4,7 @@ use std::path::Path;
 use self::engine::engine::{CreateClowderDto, ENGINE, Engine};
 use self::segment::resource::VectorMetadata;
 use self::shared::hairball::Hairball;
-use self::shared::results::{NekoSearchResult, NekoStats};
+use self::shared::results::{NekoMetadata, NekoSearchResult, NekoStats};
 
 pub mod engine;
 pub mod manifest;
@@ -426,6 +426,81 @@ pub unsafe extern "C" fn neko_delete(name: *const c_char, id: *const c_char) -> 
     match engine.write().unwrap().delete_vector(&name_str, &id_str) {
         Ok(_) => 0,
         Err(err) => err as c_int,
+    }
+}
+/// Retrieve a vector + metadata by ID. Caller owns the returned
+/// `NekoMetadata.metadata` pointer and must free it via `neko_free_metadata`.
+///
+/// # Safety
+/// `name` and `id` must be valid null-terminated C strings. `vector_out` must
+/// point to writable memory of at least `dim * sizeof(f32)` bytes.
+/// `metadata_out` must point to a writable `NekoMetadata`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn neko_get_vector(name: *const c_char, id: *const c_char, vector_out: *mut f32, dim: u32, metadata_out: *mut NekoMetadata) -> c_int {
+    let raw_name_string = unsafe { c_str_to_string(name) };
+    let name_str = match raw_name_string {
+        Some(string) => string,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    let raw_id_string = unsafe { c_str_to_string(id) };
+    let id_str = match raw_id_string {
+        Some(string) => string,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    let engine = match ENGINE.get() {
+        Some(engine) => engine,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    if vector_out.is_null() || metadata_out.is_null() {
+        return Hairball::InternalError as c_int;
+    };
+
+    let clowder = match engine.read().unwrap().clowders.get(&name_str) {
+        Some(clowder) => clowder.clone(),
+        None => return Hairball::NotFound as c_int,
+    };
+
+    let vector_owned = {
+        let vectors = clowder.vectors.lock().unwrap();
+        match vectors.get(&id_str) {
+            Some(vector) => vector.clone(),
+            None => return Hairball::NotFound as c_int,
+        }
+    };
+
+    if vector_owned.len() != dim as usize {
+        return Hairball::InternalError as c_int;
+    }
+
+    let metadata_string = clowder.metadata.lock().unwrap().get(&id_str).cloned().unwrap_or_default();
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(vector_owned.as_ptr(), vector_out, dim as usize);
+        let c_string = std::ffi::CString::new(metadata_string).unwrap_or_default();
+        (*metadata_out).metadata = c_string.into_raw();
+    }
+    0
+}
+
+/// Free a NekoMetadata previously returned by a neko_get_vector
+///
+/// # Safety
+/// meta must point to the NekoMetadata whose metadata field was produced
+/// by neko_get_vector, or be a null (in which case this is a no-op)
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn neko_free_metadata(meta: *mut NekoMetadata) {
+    if meta.is_null() {
+        return;
+    }
+
+    unsafe {
+        let m = &*meta;
+        if !m.metadata.is_null() {
+            drop(std::ffi::CString::from_raw(m.metadata));
+        }
     }
 }
 
@@ -928,5 +1003,90 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let result = unsafe { neko_delete(std::ptr::null(), doc_id.as_ptr()) };
         assert_eq!(result, Hairball::InternalError as i32);
+    }
+
+    #[test]
+    fn given_insert_with_metadata_via_ffi_then_get_vector_round_trips_metadata() {
+        ffi_init();
+        ffi_cleanup("ffi_test_get_vector_meta");
+
+        let collection = CString::new("ffi_test_get_vector_meta").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [1.0, 2.0, 3.0];
+        let metadata_json = CString::new(r#"{"author":"alice"}"#).unwrap();
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        let result = unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, metadata_json.as_ptr()) };
+        assert_eq!(result, 0);
+
+        let mut out = vec![0.0_f32; 3];
+        let mut meta: NekoMetadata = NekoMetadata { metadata: std::ptr::null_mut() };
+        let result = unsafe { neko_get_vector(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3, &mut meta) };
+        assert_eq!(result, 0);
+        assert!(!meta.metadata.is_null(), "expected metadata pointer to be non-null after get");
+
+        let metadata_string = unsafe { CStr::from_ptr(meta.metadata) }.to_str().unwrap();
+        assert_eq!(metadata_string, r#"{"author":"alice"}"#);
+
+        unsafe { neko_free_metadata(&mut meta) };
+    }
+
+    #[test]
+    fn given_insert_without_metadata_via_ffi_then_get_vector_returns_null_metadata_pointer() {
+        ffi_init();
+        ffi_cleanup("ffi_test_get_vector_no_meta");
+
+        let collection = CString::new("ffi_test_get_vector_no_meta").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [4.0, 5.0, 6.0];
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        let result = unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
+        assert_eq!(result, 0);
+
+        let mut out = vec![0.0_f32; 3];
+        let mut meta: NekoMetadata = NekoMetadata { metadata: std::ptr::null_mut() };
+        let result = unsafe { neko_get_vector(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3, &mut meta) };
+        assert_eq!(result, 0);
+        // No metadata was attached, so the engine writes an empty CString
+        // (never null) — what matters is the CStr content is empty.
+        let metadata_string = unsafe { CStr::from_ptr(meta.metadata) }.to_str().unwrap();
+        assert_eq!(metadata_string, "");
+
+        unsafe { neko_free_metadata(&mut meta) };
+    }
+
+    #[test]
+    fn given_get_vector_with_nonexistent_id_via_ffi_then_returns_not_found() {
+        ffi_init();
+        ffi_cleanup("ffi_test_get_vector_nf_id");
+
+        let collection = CString::new("ffi_test_get_vector_nf_id").unwrap();
+        let doc_id = CString::new("ghost").unwrap();
+
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+
+        let mut out = vec![0.0_f32; 3];
+        let mut meta: NekoMetadata = NekoMetadata { metadata: std::ptr::null_mut() };
+        let result = unsafe { neko_get_vector(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3, &mut meta) };
+        assert_eq!(result, Hairball::NotFound as i32);
+    }
+
+    #[test]
+    fn given_get_vector_with_nonexistent_clowder_via_ffi_then_returns_not_found() {
+        ffi_init();
+
+        let collection = CString::new("no_such_clowder_get_vector").unwrap();
+        let doc_id = CString::new("doc1").unwrap();
+
+        let mut out = vec![0.0_f32; 3];
+        let mut meta: NekoMetadata = NekoMetadata { metadata: std::ptr::null_mut() };
+        let result = unsafe { neko_get_vector(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3, &mut meta) };
+        assert_eq!(result, Hairball::NotFound as i32);
+    }
+
+    #[test]
+    fn given_free_metadata_null_then_no_crash() {
+        unsafe { neko_free_metadata(std::ptr::null_mut()) };
     }
 }

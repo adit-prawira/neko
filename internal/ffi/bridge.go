@@ -282,6 +282,33 @@ func Search(name string, query []float32, topK uint32) ([]NekoSearchResult, erro
 	return results, nil
 }
 
+func GetVector(name, id string, dim uint32) ([]float32, string, error) {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	cID := C.CString(id)
+	defer C.free(unsafe.Pointer(cID))
+
+	vector := make([]C.float, dim)
+	var meta C.NekoMetadata
+	code := C.neko_get_vector(cName, cID, (*C.float)(unsafe.Pointer(&vector[0])), C.uint32_t(dim), &meta)
+	if code != 0 {
+		return nil, "", newHairballError("neko_get_vector", int(code))
+	}
+	defer C.neko_free_metadata(&meta)
+
+	out := make([]float32, dim)
+	for index, value := range vector {
+		out[index] = float32(value)
+	}
+	var metadataString string
+	if meta.metadata != nil {
+		metadataString = C.GoString(meta.metadata)
+	}
+
+	return out, metadataString, nil
+}
+
 func ParseMetric(name string) (uint8, error) {
 	code, ok := metricCodes[name]
 	if !ok {

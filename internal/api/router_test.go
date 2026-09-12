@@ -184,3 +184,47 @@ func TestUpsertVectorRoute(t *testing.T) {
 		}
 	})
 }
+
+func TestDeleteVectorRoute(t *testing.T) {
+	t.Run("given DELETE through mux, then dispatches to handler and returns 204 for existing vector", func(t *testing.T) {
+		// Creating the collection and inserting a vector first ensures the
+		// handler (not the catchall) is invoked. If the route were unregistered,
+		// the catchall would return 404 HAIRBALL_NOT_FOUND with a 'is not found'
+		// message.
+		server := routerTestSetup(t)
+		name := "router_test_delete_route"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "doc1", []float32{1.0, 0.0, 0.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+		handler := buildRoutes(server)
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodDelete, "/v1/collections/"+name+"/vectors/doc1", nil)
+
+		handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusNoContent {
+			t.Fatalf("expected 204 (route dispatched to handler), got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("given POST on delete endpoint, then falls through to catchall and returns 404", func(t *testing.T) {
+		// Pattern 'DELETE /v1/collections/{name}/vectors/{id}' only matches DELETE.
+		// A POST request to the same path falls through to the catchall.
+		server := routerTestSetup(t)
+		handler := buildRoutes(server)
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/some_name/vectors/doc1", nil)
+
+		handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("expected 404 (POST on DELETE-only route), got %d", recorder.Code)
+		}
+	})
+}

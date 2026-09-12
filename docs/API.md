@@ -179,15 +179,37 @@ Response `201`:
 
 ### Upsert Vector
 
-*Planned — not yet implemented. Will use the response-code split below via a new `neko_upsert_with_status` FFI.*
-
 ```
 PUT /collections/:name/vectors/:id
 ```
 
-Insert or update by ID. Same body as insert.
+Insert or update by ID. The `:id` is the vector ID from the path; the body contains only the vector and optional metadata.
 
-Response `200` (updated) or `201` (created).
+```json
+{
+  "vector": [0.12, -0.34, 0.78, "..."],
+  "metadata": "{\"author\":\"alice\"}"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `vector` | [f32] | yes | Floating-point vector. Must match collection dim. |
+| `metadata` | string | no | Raw JSON string echoed back by GET. |
+
+Response `201` (created) or `200` (updated):
+```json
+{ "id": "doc1", "dim": 384 }
+```
+
+| Status | Code | When |
+|--------|------|------|
+| `200` | — | Vector existed and was replaced. |
+| `201` | — | Vector did not exist; new vector stored. |
+| `400` | `HAIRBALL_INVALID_NAME` | Body is not valid JSON. |
+| `400` | `HAIRBALL_DIM_TOO_SMALL` | Vector is empty. |
+| `400` | `HAIRBALL_DIM_MISMATCH` | Vector length does not match the collection's dim. |
+| `404` | `HAIRBALL_NOT_FOUND` | Collection does not exist. |
 
 ---
 

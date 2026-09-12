@@ -259,10 +259,8 @@ Response `200`:
 
 ### Delete Vector
 
-*Planned — not yet implemented. The Rust `Engine::delete_vector` and `neko_delete` FFI already exist; only the REST handler is missing.*
-
 ```
-DELETE /collections/:name/vectors/:id
+DELETE /v1/collections/:name/vectors/:id
 ```
 
 Response `204` (no body) on success. Response `404` (`HAIRBALL_NOT_FOUND`) if the collection or vector id does not exist.

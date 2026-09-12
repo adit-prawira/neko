@@ -31,6 +31,12 @@ pub struct CreateClowderDto<'a> {
     pub model: Option<&'a str>,
 }
 
+pub struct InputVectorDto {
+    pub id: String,
+    pub vector: Vec<f32>,
+    pub metadata: VectorMetadata,
+}
+
 /*
  * The engine will responsible to
  * --> Register new namespace for vectors (neko create)
@@ -210,6 +216,83 @@ impl Engine {
             clowder.metadata.lock().unwrap().insert(id.to_string(), metadata.custom.clone());
         } else {
             clowder.metadata.lock().unwrap().remove(id);
+        }
+        Ok(())
+    }
+
+    pub fn insert_many_vector(&mut self, name: &str, input_vectors: Vec<InputVectorDto>) -> Result<()> {
+        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        Engine::validate_vectors(clowder, &input_vectors)?;
+
+        let normalised_input_vectors: Vec<InputVectorDto> = input_vectors
+            .into_iter()
+            .map(|input_vector| {
+                let mut normalised_vector = input_vector.vector;
+                if clowder.metric == 1 {
+                    let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
+                    if normalised_squares > 1e-18 {
+                        let inverse_normal = 1.0 / normalised_squares.sqrt();
+                        for component in &mut normalised_vector {
+                            *component *= inverse_normal;
+                        }
+                    }
+                }
+                InputVectorDto {
+                    id: input_vector.id,
+                    vector: normalised_vector,
+                    metadata: input_vector.metadata,
+                }
+            })
+            .collect();
+
+        if let Some(ref mut wal) = self.wal {
+            for normalised_input_vector in &normalised_input_vectors {
+                Engine::resolve_tail_log(wal, name, normalised_input_vector)?;
+            }
+        }
+
+        {
+            let mut vector_store = clowder.vectors.lock().unwrap();
+            for normalised_input_vector in &normalised_input_vectors {
+                Engine::resolve_vector_store(&mut vector_store, normalised_input_vector)?;
+            }
+        }
+
+        {
+            let mut metadata_store = clowder.metadata.lock().unwrap();
+            for normalised_input_vector in &normalised_input_vectors {
+                Engine::resolve_metadata_store(&mut metadata_store, normalised_input_vector)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_tail_log(wal: &mut WalWriter, name: &str, input_vector: &InputVectorDto) -> Result<()> {
+        let wal_id = format!("{}:{}", name, input_vector.id);
+        wal.append_insert(&wal_id, &input_vector.vector, &input_vector.metadata)?;
+        Ok(())
+    }
+
+    fn resolve_vector_store(vector_store: &mut HashMap<String, Vec<f32>>, input_vector: &InputVectorDto) -> Result<()> {
+        vector_store.insert(input_vector.id.to_string(), input_vector.vector.clone());
+        Ok(())
+    }
+
+    fn resolve_metadata_store(metadata_store: &mut HashMap<String, String>, input_vector: &InputVectorDto) -> Result<()> {
+        let has_custom_metadata = !input_vector.metadata.custom.is_empty();
+        if has_custom_metadata {
+            metadata_store.insert(input_vector.id.clone(), input_vector.metadata.custom.clone());
+        } else {
+            metadata_store.remove(&input_vector.id);
+        }
+        Ok(())
+    }
+
+    fn validate_vectors(clowder: &Clowder, input_vectors: &Vec<InputVectorDto>) -> Result<()> {
+        for input_vector in input_vectors {
+            if input_vector.vector.len() != clowder.dim as usize {
+                return Err(Hairball::DimMismatch);
+            }
         }
         Ok(())
     }
@@ -1153,5 +1236,182 @@ mod tests {
         let clowder = engine.clowders.get("docs").unwrap();
         let stored = clowder.metadata.lock().unwrap();
         assert!(!stored.contains_key("doc1"));
+    }
+
+    #[test]
+    fn given_valid_batch_then_all_vectors_inserted() {
+        let dir = temp_dir("engine_insert_many_basic");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let items = vec![
+            InputVectorDto {
+                id: "doc1".to_string(),
+                vector: vec![1.0, 2.0, 3.0],
+                metadata: empty_metadata("doc1"),
+            },
+            InputVectorDto {
+                id: "doc2".to_string(),
+                vector: vec![4.0, 5.0, 6.0],
+                metadata: empty_metadata("doc2"),
+            },
+            InputVectorDto {
+                id: "doc3".to_string(),
+                vector: vec![7.0, 8.0, 9.0],
+                metadata: empty_metadata("doc3"),
+            },
+        ];
+        engine.insert_many_vector("docs", items).unwrap();
+
+        assert_eq!(engine.get_vector("docs", "doc1").unwrap(), vec![1.0, 2.0, 3.0]);
+        assert_eq!(engine.get_vector("docs", "doc2").unwrap(), vec![4.0, 5.0, 6.0]);
+        assert_eq!(engine.get_vector("docs", "doc3").unwrap(), vec![7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn given_batch_with_wrong_dim_item_then_returns_dim_mismatch() {
+        let dir = temp_dir("engine_insert_many_dim");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let items = vec![
+            InputVectorDto {
+                id: "doc1".to_string(),
+                vector: vec![1.0, 2.0, 3.0],
+                metadata: empty_metadata("doc1"),
+            },
+            InputVectorDto {
+                id: "doc2".to_string(),
+                vector: vec![4.0, 5.0],
+                metadata: empty_metadata("doc2"),
+            },
+        ];
+        let result = engine.insert_many_vector("docs", items);
+        assert_eq!(result.unwrap_err(), Hairball::DimMismatch);
+    }
+
+    #[test]
+    fn given_batch_with_nonexistent_clowder_then_returns_not_found() {
+        let dir = temp_dir("engine_insert_many_nf");
+        let mut engine = new_engine(&dir);
+
+        let items = vec![InputVectorDto {
+            id: "doc1".to_string(),
+            vector: vec![1.0, 2.0, 3.0],
+            metadata: empty_metadata("doc1"),
+        }];
+        let result = engine.insert_many_vector("ghost", items);
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_batch_with_cosine_metric_then_vectors_normalised() {
+        let dir = temp_dir("engine_insert_many_cosine");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 2,
+                metric: 1,
+                model: None,
+            })
+            .unwrap();
+
+        let items = vec![InputVectorDto {
+            id: "doc1".to_string(),
+            vector: vec![3.0, 4.0],
+            metadata: empty_metadata("doc1"),
+        }];
+        engine.insert_many_vector("docs", items).unwrap();
+        assert_eq!(engine.get_vector("docs", "doc1").unwrap(), vec![0.6, 0.8]);
+    }
+
+    #[test]
+    fn given_batch_with_non_empty_metadata_then_metadata_map_stores_value() {
+        let dir = temp_dir("engine_insert_many_meta");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        let items = vec![InputVectorDto {
+            id: "doc1".to_string(),
+            vector: vec![1.0, 2.0, 3.0],
+            metadata: with_custom_metadata("doc1", r#"{"author":"alice"}"#),
+        }];
+        engine.insert_many_vector("docs", items).unwrap();
+
+        let clowder = engine.clowders.get("docs").unwrap();
+        let stored = clowder.metadata.lock().unwrap();
+        assert_eq!(stored.get("doc1").map(|s| s.as_str()), Some(r#"{"author":"alice"}"#));
+    }
+
+    #[test]
+    fn given_batch_with_empty_custom_metadata_then_existing_metadata_is_cleared() {
+        let dir = temp_dir("engine_insert_many_meta_clear");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 0,
+                model: None,
+            })
+            .unwrap();
+
+        engine.insert_vector("docs", "doc1", vec![1.0, 2.0, 3.0], &with_custom_metadata("doc1", "first")).unwrap();
+        {
+            let clowder = engine.clowders.get("docs").unwrap();
+            let stored = clowder.metadata.lock().unwrap();
+            assert_eq!(stored.get("doc1").map(|s| s.as_str()), Some("first"));
+        }
+
+        let items = vec![InputVectorDto {
+            id: "doc1".to_string(),
+            vector: vec![4.0, 5.0, 6.0],
+            metadata: empty_metadata("doc1"),
+        }];
+        engine.insert_many_vector("docs", items).unwrap();
+
+        let clowder = engine.clowders.get("docs").unwrap();
+        let stored = clowder.metadata.lock().unwrap();
+        assert!(!stored.contains_key("doc1"), "empty custom metadata must clear existing entry");
+    }
+
+    fn empty_metadata(id: &str) -> VectorMetadata {
+        VectorMetadata {
+            id: id.to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        }
+    }
+
+    fn with_custom_metadata(id: &str, custom: &str) -> VectorMetadata {
+        VectorMetadata {
+            id: id.to_string(),
+            created_at: 0,
+            deleted: false,
+            custom: custom.to_string(),
+        }
     }
 }

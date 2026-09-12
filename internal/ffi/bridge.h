@@ -19,6 +19,13 @@ typedef struct {
   char *metadata;
 } NekoMetadata;
 
+typedef struct {
+  const char *id;
+  const float *vector;
+  uint32_t dim; 
+  const char *metadata;
+} NekoInputVector;
+
 int32_t neko_version(void);
 int32_t neko_init(const char *data_directory);
 int32_t neko_shutdown(void);
@@ -27,6 +34,7 @@ int32_t neko_list(char ***names, uint32_t *count);
 int32_t neko_drop(const char *name);
 int32_t neko_stats(const char *name, NekoStats *stats);
 int32_t neko_insert(const char *name, const char *id, const float *vector, uint32_t len, const char *metadata);
+int32_t neko_insert_many(const char *name, const NekoInputVector *input_vectors, uint32_t count);
 int32_t neko_get(const char *name, const char *id, float *vector, uint32_t dim);
 int32_t neko_search(const char *name, const float *query, uint32_t dim, uint32_t top_k, NekoSearchResult *results);
 int32_t neko_delete(const char *name, const char *id);

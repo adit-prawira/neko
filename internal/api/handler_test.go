@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -1146,6 +1147,149 @@ func TestHandleDeleteVector(t *testing.T) {
 		}
 		if code := errorCode(t, getRecorder); code != "HAIRBALL_NOT_FOUND" {
 			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+}
+
+func TestHandleInsertManyVector(t *testing.T) {
+	t.Run("given valid body of three vectors, then returns 201 with ids, dim, and inserted count", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_batch_happy"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`[{"id":"doc1","vector":[1.0,2.0,3.0]},{"id":"doc2","vector":[4.0,5.0,6.0]},{"id":"doc3","vector":[7.0,8.0,9.0]}]`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors/batch", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertManyVector(recorder, request)
+
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		response := decodeResponse(t, recorder)
+		if response["inserted"] != float64(3) {
+			t.Errorf("expected inserted=3, got %v", response["inserted"])
+		}
+		if response["dim"] != float64(3) {
+			t.Errorf("expected dim=3, got %v", response["dim"])
+		}
+		ids, ok := response["ids"].([]any)
+		if !ok || len(ids) != 3 {
+			t.Fatalf("expected ids to be a 3-element array, got %v", response["ids"])
+		}
+		if ids[0] != "doc1" || ids[1] != "doc2" || ids[2] != "doc3" {
+			t.Errorf("expected ids [doc1 doc2 doc3], got %v", ids)
+		}
+	})
+
+	t.Run("given empty body, then returns 400 with HAIRBALL_INVALID_NAME", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_batch_empty"
+
+		body := strings.NewReader(`[]`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors/batch", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertManyVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_INVALID_NAME" {
+			t.Errorf("expected HAIRBALL_INVALID_NAME, got %s", code)
+		}
+	})
+
+	t.Run("given batch size above cap, then returns 400 with HAIRBALL_INVALID_NAME", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_batch_oversize"
+
+		var items []string
+		for index := 0; index < 10001; index++ {
+			items = append(items, fmt.Sprintf(`{"id":"doc%d","vector":[1.0,2.0,3.0]}`, index))
+		}
+		body := strings.NewReader("[" + strings.Join(items, ",") + "]")
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors/batch", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertManyVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_INVALID_NAME" {
+			t.Errorf("expected HAIRBALL_INVALID_NAME, got %s", code)
+		}
+	})
+
+	t.Run("given nonexistent collection, then returns 404 with HAIRBALL_NOT_FOUND", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "no_such_api_batch_clowder"
+
+		body := strings.NewReader(`[{"id":"doc1","vector":[1.0,2.0,3.0]}]`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors/batch", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertManyVector(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected status 404, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_NOT_FOUND" {
+			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+
+	t.Run("given item with empty id, then returns 400 with index in message", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_batch_empty_id"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`[{"id":"doc1","vector":[1.0,2.0,3.0]},{"id":"","vector":[4.0,5.0,6.0]}]`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors/batch", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertManyVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_INVALID_NAME" {
+			t.Errorf("expected HAIRBALL_INVALID_NAME, got %s", code)
+		}
+	})
+
+	t.Run("given item with wrong dim, then returns 400 with HAIRBALL_DIM_MISMATCH", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_batch_dim"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		body := strings.NewReader(`[{"id":"doc1","vector":[1.0,2.0,3.0]},{"id":"doc2","vector":[4.0,5.0]}]`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors/batch", body)
+		request.SetPathValue("name", name)
+
+		server.HandleInsertManyVector(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_DIM_MISMATCH" {
+			t.Errorf("expected HAIRBALL_DIM_MISMATCH, got %s", code)
 		}
 	})
 }

@@ -196,6 +196,73 @@ func Insert(name, id string, vector []float32, metadata string) error {
 	return nil
 }
 
+type InputVector struct {
+	ID       string
+	Vector   []float32
+	Metadata string
+}
+
+func InsertMany(name string, inputVectors []InputVector) error {
+	if len(inputVectors) == 0 {
+		return newHairballError("neko_insert_many", shared.HairballDimTooSmall.Int())
+	}
+
+	count := len(inputVectors)
+	cCount := C.uint32_t(count)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	totalFloats := 0
+	for _, item := range inputVectors {
+		totalFloats += len(item.Vector)
+	}
+	var cVectorBuffer *C.float
+	if totalFloats > 0 {
+		cVectorBuffer = (*C.float)(C.malloc(C.size_t(totalFloats) * C.sizeof_float))
+		defer C.free(unsafe.Pointer(cVectorBuffer))
+	}
+	cVectorSlice := unsafe.Slice(cVectorBuffer, totalFloats)
+
+	cInputVectors := make([]C.NekoInputVector, count)
+	writeOffset := 0
+	for index, item := range inputVectors {
+		cID := C.CString(item.ID)
+		defer C.free(unsafe.Pointer(cID))
+
+		dim := len(item.Vector)
+		cDim := C.uint32_t(dim)
+
+		for _, component := range item.Vector {
+			cVectorSlice[writeOffset] = C.float(component)
+			writeOffset++
+		}
+
+		var cVector *C.float
+		if dim > 0 {
+			cVector = &cVectorSlice[writeOffset-dim]
+		}
+
+		var cMetadata *C.char
+		if item.Metadata != "" {
+			cMetadata = C.CString(item.Metadata)
+			defer C.free(unsafe.Pointer(cMetadata))
+		}
+
+		cInputVectors[index] = C.NekoInputVector{
+			id:       cID,
+			vector:   cVector,
+			dim:      cDim,
+			metadata: cMetadata,
+		}
+	}
+
+	code := C.neko_insert_many(cName, &cInputVectors[0], cCount)
+	if code != 0 {
+		return newHairballError("neko_insert_many", int(code))
+	}
+	return nil
+}
+
 func Upsert(name, id string, vector []float32, metadata string) (bool, error) {
 	if len(vector) == 0 {
 		return false, newHairballError("neko_upsert", shared.HairballDimTooSmall.Int())

@@ -16,6 +16,8 @@ func buildRoutes(s *Server) http.Handler {
 	mux.HandleFunc("DELETE /v1/collections/{name}", s.HandleDropCollection)
 	mux.HandleFunc("POST /v1/collections/{name}/search", s.HandleSearchCollection)
 	mux.HandleFunc("POST /v1/collections/{name}/vectors", s.HandleInsertVector)
+	mux.HandleFunc("POST /v1/collections/{name}/vectors/batch", s.HandleInsertManyVector)
+
 	mux.HandleFunc("GET /v1/collections/{name}/vectors/{id}", s.HandleGetVector)
 	mux.HandleFunc("PUT /v1/collections/{name}/vectors/{id}", s.HandleUpsertVector)
 	mux.HandleFunc("DELETE /v1/collections/{name}/vectors/{id}", s.HandleDeleteVector)

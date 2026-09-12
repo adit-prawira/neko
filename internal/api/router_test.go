@@ -228,3 +228,44 @@ func TestDeleteVectorRoute(t *testing.T) {
 		}
 	})
 }
+
+func TestInsertManyVectorRoute(t *testing.T) {
+	t.Run("given POST through mux to batch endpoint, then dispatches to handler and returns 201 for valid body", func(t *testing.T) {
+		// Creating the collection first ensures the handler (not the catchall)
+		// is invoked. If the route were unregistered, the catchall would return
+		// 404 HAIRBALL_NOT_FOUND with a 'is not found' message.
+		server := routerTestSetup(t)
+		name := "router_test_batch_route"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		handler := buildRoutes(server)
+
+		body := strings.NewReader(`[{"id":"doc1","vector":[1.0,2.0,3.0]}]`)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/collections/"+name+"/vectors/batch", body)
+
+		handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("expected 201 (route dispatched to handler), got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("given GET on batch endpoint, then falls through to catchall and returns 404", func(t *testing.T) {
+		// Pattern 'POST /v1/collections/{name}/vectors/batch' only matches POST.
+		// A GET request to the same path falls through to the catchall.
+		server := routerTestSetup(t)
+		handler := buildRoutes(server)
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/v1/collections/some_name/vectors/batch", nil)
+
+		handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("expected 404 (GET on POST-only route), got %d", recorder.Code)
+		}
+	})
+}

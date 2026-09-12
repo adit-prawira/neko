@@ -510,3 +510,96 @@ func TestUpsertEmptyVectorReturnsHairballError(t *testing.T) {
 func TestUpsertRoundTripsMetadata(t *testing.T) {
 	t.Skip("pre-existing bug: neko_upsert FFI parses metadata as VectorMetadata struct instead of treating it as opaque custom JSON, unlike neko_insert. FFI fix needed before this can pass.")
 }
+
+func TestInsertManyRoundTrips(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_insert_many_basic")
+	if err := Create("go_test_insert_many_basic", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	items := []InputVector{
+		{ID: "doc1", Vector: []float32{1.0, 2.0, 3.0}, Metadata: ""},
+		{ID: "doc2", Vector: []float32{4.0, 5.0, 6.0}, Metadata: ""},
+		{ID: "doc3", Vector: []float32{7.0, 8.0, 9.0}, Metadata: ""},
+	}
+	if err := InsertMany("go_test_insert_many_basic", items); err != nil {
+		t.Fatalf("InsertMany failed: %v", err)
+	}
+
+	retrieved, err := Get("go_test_insert_many_basic", "doc2", 3)
+	if err != nil {
+		t.Fatalf("Get doc2 failed: %v", err)
+	}
+	if retrieved[0] != 4.0 || retrieved[1] != 5.0 || retrieved[2] != 6.0 {
+		t.Errorf("doc2 mismatch: got %v, want [4 5 6]", retrieved)
+	}
+}
+
+func TestInsertManyEmpty(t *testing.T) {
+	testInit(t)
+	if err := InsertMany("any_collection", []InputVector{}); err == nil {
+		t.Error("expected error for empty input, got nil")
+	}
+}
+
+func TestInsertManyNonexistentClowder(t *testing.T) {
+	testInit(t)
+	items := []InputVector{
+		{ID: "doc1", Vector: []float32{1.0, 2.0, 3.0}, Metadata: ""},
+	}
+	err := InsertMany("no_such_clowder_for_batch", items)
+	if err == nil {
+		t.Fatal("expected error for nonexistent clowder, got nil")
+	}
+	var hairball *HairballError
+	if !errors.As(err, &hairball) {
+		t.Fatalf("expected *HairballError, got %T: %v", err, err)
+	}
+	if hairball.Code != 1 {
+		t.Errorf("expected HairballNotFound (code 1), got %d", hairball.Code)
+	}
+}
+
+func TestInsertManyWrongDim(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_insert_many_dim")
+	if err := Create("go_test_insert_many_dim", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	items := []InputVector{
+		{ID: "doc1", Vector: []float32{1.0, 2.0}, Metadata: ""},
+	}
+	err := InsertMany("go_test_insert_many_dim", items)
+	if err == nil {
+		t.Fatal("expected error for dim mismatch, got nil")
+	}
+	var hairball *HairballError
+	if !errors.As(err, &hairball) {
+		t.Fatalf("expected *HairballError, got %T: %v", err, err)
+	}
+	if hairball.Code != 3 {
+		t.Errorf("expected HairballDimMismatch (code 3), got %d", hairball.Code)
+	}
+}
+
+func TestInsertManyPersistsMetadata(t *testing.T) {
+	testInit(t)
+	testCleanup("go_test_insert_many_meta")
+	if err := Create("go_test_insert_many_meta", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	items := []InputVector{
+		{ID: "doc1", Vector: []float32{1.0, 2.0, 3.0}, Metadata: `{"author":"alice"}`},
+	}
+	if err := InsertMany("go_test_insert_many_meta", items); err != nil {
+		t.Fatalf("InsertMany failed: %v", err)
+	}
+	_, metadata, err := GetVector("go_test_insert_many_meta", "doc1", 3)
+	if err != nil {
+		t.Fatalf("GetVector failed: %v", err)
+	}
+	if metadata != `{"author":"alice"}` {
+		t.Errorf("metadata mismatch: got %q, want %q", metadata, `{"author":"alice"}`)
+	}
+}

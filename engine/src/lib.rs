@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::path::Path;
 
-use self::engine::engine::{CreateClowderDto, ENGINE, Engine};
+use self::engine::engine::{CreateClowderDto, ENGINE, Engine, InputVectorDto};
 use self::segment::resource::VectorMetadata;
 use self::shared::hairball::Hairball;
 use self::shared::results::{NekoMetadata, NekoSearchResult, NekoStats};
@@ -229,6 +229,92 @@ pub unsafe extern "C" fn neko_insert(name: *const c_char, id: *const c_char, vec
 
     let vector_slice = unsafe { std::slice::from_raw_parts(vector, len as usize) };
     match engine.write().unwrap().insert_vector(&name_str, &id_str, vector_slice.to_vec(), &vector_metadata) {
+        Ok(_) => 0,
+        Err(err) => err as c_int,
+    }
+}
+
+/// id must point to count valid C String pointers
+/// vectors must point to a valid f32 value
+/// dim must point to a valid u32 value
+/// metadata must be valid C String pointers where it can nullble
+#[repr(C)]
+pub struct NekoInputVector {
+    pub id: *const c_char,
+    pub vector: *const f32,
+    pub dim: u32,
+    pub metadata: *const c_char,
+}
+
+/// Insert many vector into a collection in one FFI call
+///
+/// # Safety
+/// name must be valid, as null will terminate C String.
+/// Each `NekoInputVector.id` must be a valid
+///     C string (null is rejected with `InternalError`). Each `NekoInputVector.vector` must
+///     point to at least `dim` valid f32 values. Each `NekoInputVector.metadata` may be
+///     null to indicate no metadata for that item.
+/// count is total of how many vector to be inserted
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn neko_insert_many(name: *const c_char, input_vectors: *const NekoInputVector, count: u32) -> c_int {
+    if name.is_null() || input_vectors.is_null() {
+        return Hairball::InternalError as c_int;
+    }
+
+    if count == 0 {
+        return Hairball::InternalError as c_int;
+    }
+
+    let raw_name_string = unsafe { c_str_to_string(name) };
+    let name_string = match raw_name_string {
+        Some(string) => string,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    let raw_input_vectors = unsafe { std::slice::from_raw_parts(input_vectors, count as usize) };
+    let mut processed_input_vectors = Vec::with_capacity(count as usize);
+
+    for raw_input_vector in raw_input_vectors {
+        let raw_id_string = unsafe { c_str_to_string(raw_input_vector.id) };
+        let id_string = match raw_id_string {
+            Some(string) => string,
+            None => return Hairball::InternalError as c_int,
+        };
+
+        if raw_input_vector.vector.is_null() {
+            return Hairball::InternalError as c_int;
+        }
+
+        let vector_owned = unsafe { std::slice::from_raw_parts(raw_input_vector.vector, raw_input_vector.dim as usize) }.to_vec();
+        let raw_metadata_string = unsafe { c_str_to_string(raw_input_vector.metadata) };
+        let vector_metadata: VectorMetadata = match raw_metadata_string {
+            Some(string) if !string.is_empty() => VectorMetadata {
+                id: id_string.clone(),
+                created_at: 0,
+                deleted: false,
+                custom: string,
+            },
+            _ => VectorMetadata {
+                id: id_string.clone(),
+                created_at: 0,
+                deleted: false,
+                custom: String::new(),
+            },
+        };
+
+        processed_input_vectors.push(InputVectorDto {
+            id: id_string,
+            vector: vector_owned,
+            metadata: vector_metadata,
+        });
+    }
+
+    let engine = match ENGINE.get() {
+        Some(engine) => engine,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    match engine.write().unwrap().insert_many_vector(&name_string, processed_input_vectors) {
         Ok(_) => 0,
         Err(err) => err as c_int,
     }
@@ -1177,5 +1263,196 @@ mod tests {
         let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, metadata.as_ptr(), &mut created) };
         assert_eq!(result, 0);
         assert_eq!(created, 1, "metadata must not affect the created flag");
+    }
+
+    #[test]
+    fn given_valid_batch_via_ffi_then_all_vectors_retrievable() {
+        ffi_init();
+        ffi_cleanup("ffi_test_insert_many_basic");
+        let collection = CString::new("ffi_test_insert_many_basic").unwrap();
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+
+        let id_one = CString::new("doc1").unwrap();
+        let id_two = CString::new("doc2").unwrap();
+        let id_three = CString::new("doc3").unwrap();
+        let vector_one: [f32; 3] = [1.0, 2.0, 3.0];
+        let vector_two: [f32; 3] = [4.0, 5.0, 6.0];
+        let vector_three: [f32; 3] = [7.0, 8.0, 9.0];
+        let items = vec![
+            NekoInputVector {
+                id: id_one.as_ptr(),
+                vector: vector_one.as_ptr(),
+                dim: 3,
+                metadata: std::ptr::null(),
+            },
+            NekoInputVector {
+                id: id_two.as_ptr(),
+                vector: vector_two.as_ptr(),
+                dim: 3,
+                metadata: std::ptr::null(),
+            },
+            NekoInputVector {
+                id: id_three.as_ptr(),
+                vector: vector_three.as_ptr(),
+                dim: 3,
+                metadata: std::ptr::null(),
+            },
+        ];
+
+        let code = unsafe { neko_insert_many(collection.as_ptr(), items.as_ptr(), items.len() as u32) };
+        assert_eq!(code, 0, "batch insert of three valid vectors must succeed");
+
+        let mut retrieved_two: [f32; 3] = [0.0; 3];
+        let get_code = unsafe { neko_get(collection.as_ptr(), id_two.as_ptr(), retrieved_two.as_mut_ptr(), 3) };
+        assert_eq!(get_code, 0);
+        assert_eq!(retrieved_two, [4.0, 5.0, 6.0], "l2 metric does not normalise; raw values must round-trip");
+    }
+
+    #[test]
+    fn given_batch_with_wrong_dim_via_ffi_then_returns_dim_mismatch() {
+        ffi_init();
+        ffi_cleanup("ffi_test_insert_many_dim");
+        let collection = CString::new("ffi_test_insert_many_dim").unwrap();
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+
+        let id = CString::new("doc1").unwrap();
+        let wrong_dim_vector: [f32; 2] = [1.0, 2.0];
+        let items = vec![NekoInputVector {
+            id: id.as_ptr(),
+            vector: wrong_dim_vector.as_ptr(),
+            dim: 2,
+            metadata: std::ptr::null(),
+        }];
+
+        let code = unsafe { neko_insert_many(collection.as_ptr(), items.as_ptr(), 1) };
+        assert_eq!(code, Hairball::DimMismatch as c_int);
+    }
+
+    #[test]
+    fn given_batch_with_nonexistent_clowder_via_ffi_then_returns_not_found() {
+        ffi_init();
+
+        let collection = CString::new("no_such_clowder_insert_many").unwrap();
+        let id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [1.0, 2.0, 3.0];
+        let items = vec![NekoInputVector {
+            id: id.as_ptr(),
+            vector: vector.as_ptr(),
+            dim: 3,
+            metadata: std::ptr::null(),
+        }];
+
+        let code = unsafe { neko_insert_many(collection.as_ptr(), items.as_ptr(), 1) };
+        assert_eq!(code, Hairball::NotFound as c_int);
+    }
+
+    #[test]
+    fn given_batch_with_count_zero_via_ffi_then_returns_internal_error() {
+        ffi_init();
+        ffi_cleanup("ffi_test_insert_many_count_zero");
+        let collection = CString::new("ffi_test_insert_many_count_zero").unwrap();
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+
+        let code = unsafe { neko_insert_many(collection.as_ptr(), std::ptr::null(), 0) };
+        assert_eq!(code, Hairball::InternalError as c_int);
+    }
+
+    #[test]
+    fn given_batch_with_null_name_via_ffi_then_returns_internal_error() {
+        ffi_init();
+        let id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [1.0, 2.0, 3.0];
+        let items = vec![NekoInputVector {
+            id: id.as_ptr(),
+            vector: vector.as_ptr(),
+            dim: 3,
+            metadata: std::ptr::null(),
+        }];
+
+        let code = unsafe { neko_insert_many(std::ptr::null(), items.as_ptr(), 1) };
+        assert_eq!(code, Hairball::InternalError as c_int);
+    }
+
+    #[test]
+    fn given_batch_with_null_input_vectors_via_ffi_then_returns_internal_error() {
+        ffi_init();
+        let collection = CString::new("ffi_test_insert_many_null_items").unwrap();
+
+        let code = unsafe { neko_insert_many(collection.as_ptr(), std::ptr::null(), 5) };
+        assert_eq!(code, Hairball::InternalError as c_int);
+    }
+
+    #[test]
+    fn given_batch_with_null_item_vector_via_ffi_then_returns_internal_error() {
+        ffi_init();
+        ffi_cleanup("ffi_test_insert_many_null_vec");
+        let collection = CString::new("ffi_test_insert_many_null_vec").unwrap();
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+
+        let id = CString::new("doc1").unwrap();
+        let items = vec![NekoInputVector {
+            id: id.as_ptr(),
+            vector: std::ptr::null(),
+            dim: 3,
+            metadata: std::ptr::null(),
+        }];
+
+        let code = unsafe { neko_insert_many(collection.as_ptr(), items.as_ptr(), 1) };
+        assert_eq!(code, Hairball::InternalError as c_int);
+    }
+
+    #[test]
+    fn given_batch_with_metadata_via_ffi_then_metadata_persisted() {
+        ffi_init();
+        ffi_cleanup("ffi_test_insert_many_meta");
+        let collection = CString::new("ffi_test_insert_many_meta").unwrap();
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+
+        let id = CString::new("doc1").unwrap();
+        let vector: [f32; 3] = [1.0, 2.0, 3.0];
+        let metadata = CString::new(r#"{"author":"alice"}"#).unwrap();
+        let items = vec![NekoInputVector {
+            id: id.as_ptr(),
+            vector: vector.as_ptr(),
+            dim: 3,
+            metadata: metadata.as_ptr(),
+        }];
+
+        let code = unsafe { neko_insert_many(collection.as_ptr(), items.as_ptr(), 1) };
+        assert_eq!(code, 0);
+
+        let mut retrieved_vector: [f32; 3] = [0.0; 3];
+        let mut retrieved_metadata = NekoMetadata { metadata: std::ptr::null_mut() };
+        let get_code = unsafe { neko_get_vector(collection.as_ptr(), id.as_ptr(), retrieved_vector.as_mut_ptr(), 3, &mut retrieved_metadata) };
+        assert_eq!(get_code, 0);
+        assert!(!retrieved_metadata.metadata.is_null());
+        let metadata_string = unsafe { CStr::from_ptr(retrieved_metadata.metadata) }.to_str().unwrap();
+        assert_eq!(metadata_string, r#"{"author":"alice"}"#);
+        unsafe { neko_free_metadata(&mut retrieved_metadata) };
+    }
+
+    #[test]
+    fn given_batch_via_ffi_with_cosine_metric_then_vectors_normalised() {
+        ffi_init();
+        ffi_cleanup("ffi_test_insert_many_cosine");
+        let collection = CString::new("ffi_test_insert_many_cosine").unwrap();
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 2, 1, std::ptr::null()) }, 0);
+
+        let id = CString::new("doc1").unwrap();
+        let vector: [f32; 2] = [3.0, 4.0];
+        let items = vec![NekoInputVector {
+            id: id.as_ptr(),
+            vector: vector.as_ptr(),
+            dim: 2,
+            metadata: std::ptr::null(),
+        }];
+
+        let code = unsafe { neko_insert_many(collection.as_ptr(), items.as_ptr(), 1) };
+        assert_eq!(code, 0);
+
+        let mut retrieved: [f32; 2] = [0.0; 2];
+        let get_code = unsafe { neko_get(collection.as_ptr(), id.as_ptr(), retrieved.as_mut_ptr(), 2) };
+        assert_eq!(get_code, 0);
+        assert_eq!(retrieved, [0.6, 0.8], "cosine metric must normalise [3, 4] to [3/5, 4/5]");
     }
 }

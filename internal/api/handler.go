@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync/atomic"
 
@@ -234,6 +235,80 @@ func (s *Server) HandleInsertVector(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
+const maxBatchInsertSize = 10000
+
+type InsertManyVectorResponseHttpDTO struct {
+	IDs      []string `json:"ids"`
+	Inserted int      `json:"inserted"`
+	Dim      uint32   `json:"dim"`
+}
+
+func (s *Server) HandleInsertManyVector(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body []UpsertVectorHttpDTO
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "invalid request body")
+		return
+	}
+
+	if len(body) == 0 {
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "vector array is required and must not be empty")
+		return
+	}
+
+	if len(body) > maxBatchInsertSize {
+		message := fmt.Sprintf("batch size %d exceeds maximum of %d vectors", len(body), maxBatchInsertSize)
+		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), message)
+		return
+	}
+
+	stats, err := ffi.Stats(name)
+	if err != nil {
+		WriteFFIError(rw, err)
+		return
+	}
+
+	inputVectors := make([]ffi.InputVector, 0, len(body))
+	for index, input := range body {
+		if input.ID == "" {
+			message := fmt.Sprintf("vector[%d].id is required", index)
+			WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), message)
+			return
+		}
+
+		dim := len(input.Vector)
+		if dim != int(stats.Dim) {
+			message := fmt.Sprintf("vectors[%d] has dim %d, expected %d", index, dim, stats.Dim)
+			WriteHairball(rw, http.StatusBadRequest, shared.HairballDimMismatch.String(), message)
+			return
+		}
+
+		inputVectors = append(inputVectors, ffi.InputVector{
+			ID:       input.ID,
+			Vector:   input.Vector,
+			Metadata: input.Metadata,
+		})
+	}
+
+	if err := ffi.InsertMany(name, inputVectors); err != nil {
+		WriteFFIError(rw, err)
+		return
+	}
+
+	insertedIDs := make([]string, len(body))
+
+	for index, input := range body {
+		insertedIDs[index] = input.ID
+	}
+
+	WriteJSON(rw, http.StatusCreated, InsertManyVectorResponseHttpDTO{
+		IDs:      insertedIDs,
+		Inserted: len(insertedIDs),
+		Dim:      stats.Dim,
+	})
+}
+
 type GetVectorResponseHttpDTO struct {
 	ID       string    `json:"id"`
 	Vector   []float32 `json:"vector"`
@@ -271,7 +346,7 @@ func (s *Server) HandleUpsertVector(rw http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "invalid request body")
 		return
-	}	
+	}
 
 	created, err := ffi.Upsert(name, id, body.Vector, body.Metadata)
 	if err != nil {
@@ -292,7 +367,7 @@ func (s *Server) HandleUpsertVector(rw http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleDeleteVector(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	id  := r.PathValue("id")
+	id := r.PathValue("id")
 
 	if err := ffi.Delete(name, id); err != nil {
 		WriteFFIError(rw, err)

@@ -63,6 +63,11 @@ make
   → Single static binary: ./neko
 ```
 
+The `make build` target depends on a `swag` target that runs `swag init` to
+regenerate `internal/api/docs/` (OpenAPI spec + embedded binary) before the
+Go binary is compiled. The spec is served at runtime by `http-swagger`
+middleware mounted at `GET /swagger/`.
+
 ## Disk Layout
 
 ```
@@ -229,24 +234,23 @@ pub struct NekoInputVector {
 
 ## Concurrency Model
 
-- **Rust:** Single-threaded index per collection (RWLock). Search is read-parallel via `rayon`.
+- **Rust:** Single-threaded index per collection (RWLock). Search is single-threaded in v0.1.0 — `rayon` is **not** a current dependency. Read-parallel HNSW search is a Phase 1 deliverable.
 - **Go:** Standard `net/http` goroutine-per-request model. API calls serialize through Rust FFI (mutex-guarded).
 - **C:** Stateless SIMD kernels. No threading concerns.
 
 ## Rust Engine State
 
-The Rust engine maintains a global singleton with interior mutability:
+The Rust engine maintains a global singleton with interior mutability. **In v0.1.0 the engine is in-memory only** — the WAL writes to `tail.log` and survives restart, but the Clowder stores its vectors and metadata in plain `HashMap`s rather than in mmap'd segment files. LSM segments are a Phase 0.5 / Phase 1 deliverable.
 
 ```rust
-// engine/src/engine.rs
+// engine/src/engine/resource.rs
 struct Clowder {
     name: String,
     dim: u32,
-    metric: Metric,
-    model: Option<String>,       // bound model name (Phase 2+)
-    segments: Vec<Segment>,      // mmap'd, immutable
-    wal: Mutex<WAL>,             // append-only, single-writer
-    manifest: RwLock<Manifest>,  // segment list + compaction state
+    metric: u8,                          // 0 = L2, 1 = cosine, 2 = dot
+    model: Option<String>,               // bound model name (Phase 2+)
+    vectors: Mutex<HashMap<String, Vec<f32>>>,   // id -> raw f32 vector
+    metadata: Mutex<HashMap<String, String>>,    // id -> raw JSON metadata string
 }
 
 struct Engine {
@@ -260,12 +264,12 @@ static ENGINE: OnceLock<RwLock<Engine>> = OnceLock::new();
 
 Locking strategy:
 - `Engine.clowders`: `RwLock` — read for most operations, write for create/drop
-- `Clowder.wal`: `Mutex` — serializes writes (only one thread appends to WAL)
-- `Clowder.manifest`: `RwLock` — read for search, write for segment rotation
+- `Clowder.vectors`: `Mutex` — serialized on every insert/get/delete
+- `Clowder.metadata`: `Mutex` — serialized on every insert/get/delete
 
 All FFI functions acquire the engine lock first, then operate on the clowder.
-Insert path: `engine.read() → clowder.wal.lock() → append → release`
-Search path: `engine.read() → clowder.segments (immutable, no lock) → SIMD scan → release`
+Insert path: `engine.read() → clowder.vectors.lock() → write → release`
+Search path: `engine.read() → clowder.vectors.lock() → clone reference → release → SIMD scan`
 
 ## WAL Rotation & Compaction
 
@@ -292,7 +296,7 @@ This keeps WAL bounded, segments optimized for mmap reads, and crash safety inta
 
 ## Memory Model
 
-- Vectors live in mmap'd files. OS page cache handles read caching.
-- HNSW graph lives in Rust heap (Arc<RwLock<>>).
-- WAL is append-only, flushed on insert. Replayed on startup for crash recovery.
-- Metadata lives in Go-side BTree for fast string matching.
+- **v0.1.0 (Phase 0)**: Vectors and metadata live in `Clowder.vectors` and `Clowder.metadata` — plain `HashMap`s inside the Rust engine process. No mmap, no segments, no on-disk vector files.
+- The WAL is append-only, flushed (fsync) on every insert, and replayed on startup to recover state across restarts.
+- The on-disk segment format (mmap'd `.vec` files, `.idx` lookup, `.meta` blobs) is **planned** for Phase 0.5 / Phase 1. The disk layout block above is the target shape, not the current shape.
+- Metadata is stored alongside vectors in the engine, not in a Go-side BTree.

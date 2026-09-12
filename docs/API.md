@@ -4,6 +4,13 @@ Base URL: `http://localhost:3434/v1`
 
 Content-Type: `application/json`
 
+> **Live OpenAPI spec** — A machine-readable spec for every endpoint in this document is generated from the `// @`-comment annotations on each handler in `internal/api/handler.go` via [swaggo](https://github.com/swaggo/swag). When `neko serve` is running, it's available at:
+> - **JSON spec**: `http://localhost:3434/swagger/doc.json`
+> - **YAML spec**: `internal/api/docs/swagger.yaml` in the source tree
+> - **Interactive UI**: `http://localhost:3434/swagger/index.html`
+>
+> The spec is regenerated on every `make build`. Drift between the routes and the spec is caught by `internal/api/docs_test.go` at test time — adding a new route without an annotation (or vice versa) fails the build.
+
 ## Collections
 
 ### Create Collection

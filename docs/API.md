@@ -9,7 +9,7 @@ Content-Type: `application/json`
 ### Create Collection
 
 ```
-POST /collections
+POST /v1/collections
 ```
 
 ```json
@@ -44,7 +44,7 @@ Response `201`:
 ### List Collections
 
 ```
-GET /collections
+GET /v1/collections
 ```
 
 Response `200`:
@@ -67,7 +67,7 @@ Response `200`:
 ### Get Collection Info
 
 ```
-GET /collections/:name
+GET /v1/collections/:name
 ```
 
 Response `200`:
@@ -88,7 +88,7 @@ Response `200`:
 ### Drop Collection
 
 ```
-DELETE /collections/:name
+DELETE /v1/collections/:name
 ```
 
 Response `204` (no body).
@@ -100,7 +100,7 @@ Response `204` (no body).
 ### Insert Vector
 
 ```
-POST /collections/:name/vectors
+POST /v1/collections/:name/vectors
 ```
 
 ```json
@@ -129,7 +129,7 @@ Response `201`:
 ### Get Vector
 
 ```
-GET /collections/:name/vectors/:id
+GET /v1/collections/:name/vectors/:id
 ```
 
 Response `200`:
@@ -153,34 +153,54 @@ Response `404` (`HAIRBALL_NOT_FOUND`) if the collection or vector id does not ex
 
 ### Batch Insert Vectors
 
-*Planned — not yet implemented. Will use the same request/response shape shown below; the FFI will require a single `neko_batch_insert` call.*
+```
+POST /v1/collections/:name/vectors/batch
+```
 
-```
-POST /collections/:name/vectors/batch
-```
+Insert up to 10,000 vectors in one call. The body is a bare JSON array
+of vector objects (same shape as the single-insert body). The whole batch
+is dispatched through a single FFI call (`neko_insert_many`).
 
 ```json
-{
-  "vectors": [
-    { "id": "doc_1", "vector": [0.12, -0.34, "..."] },
-    { "id": "doc_2", "vector": [0.56, 0.78, "..."] }
-  ]
-}
+[
+  { "id": "doc_1", "vector": [0.12, -0.34, 0.78, "..."] },
+  { "id": "doc_2", "vector": [0.56, 0.78, 0.90, "..."], "metadata": "{\"author\":\"alice\"}" }
+]
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | yes | Unique vector ID. 1-256 chars. |
+| `vector` | [f32] | yes | Floating-point vector. Must match the collection's dim. |
+| `metadata` | string | no | Raw JSON string echoed back by GET. |
 
 Response `201`:
 ```json
 {
-  "inserted": 2
+  "inserted": 2,
+  "ids": ["doc_1", "doc_2"],
+  "dim": 384
 }
 ```
+
+| Status | Code | When |
+|--------|------|------|
+| `201` | — | All vectors inserted. |
+| `400` | `HAIRBALL_INVALID_NAME` | Body is not valid JSON, the array is empty, an item is missing `id`, or the batch exceeds 10,000 vectors. |
+| `400` | `HAIRBALL_DIM_MISMATCH` | Any item's `vector` length does not match the collection's dim. |
+| `404` | `HAIRBALL_NOT_FOUND` | Collection does not exist. |
+| `500` | `HAIRBALL_INTERNAL` | FFI failure (e.g., null pointer from a malformed request). |
+
+All-or-nothing on dim and id validation: the first invalid item returns
+the error and no vectors are written. Within a valid batch, existing IDs
+are silently overwritten (use `PUT /vectors/:id` for explicit upsert).
 
 ---
 
 ### Upsert Vector
 
 ```
-PUT /collections/:name/vectors/:id
+PUT /v1/collections/:name/vectors/:id
 ```
 
 Insert or update by ID. The `:id` is the vector ID from the path; the body contains only the vector and optional metadata.
@@ -216,7 +236,7 @@ Response `201` (created) or `200` (updated):
 ### Search Vectors
 
 ```
-POST /collections/:name/search
+POST /v1/collections/:name/search
 ```
 
 ```json

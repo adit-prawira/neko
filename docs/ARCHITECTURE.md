@@ -156,67 +156,75 @@ with 384 dimensions.
 // engine/src/lib.rs
 
 // — Lifecycle —
-#[no_mangle] pub extern "C" fn neko_init(data_dir: *const c_char) -> i32;
-#[no_mangle] pub extern "C" fn neko_shutdown() -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_init(data_directory: *const c_char) -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_version() -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_shutdown() -> i32;
 
 // — Collections —
 // model may be null → uses default model (all-MiniLM-L6-v2)
-#[no_mangle] pub extern "C" fn neko_create(name: *const c_char, dim: u32,
+#[unsafe(no_mangle)] pub extern "C" fn neko_create(name: *const c_char, dim: u32,
                                              metric: u8, model: *const c_char) -> i32;
-#[no_mangle] pub extern "C" fn neko_drop(name: *const c_char) -> i32;
-#[no_mangle] pub extern "C" fn neko_list_collections(
-    names: *mut *mut c_char, count: *mut u32) -> i32;
-#[no_mangle] pub extern "C" fn neko_collection_stats(
+#[unsafe(no_mangle)] pub extern "C" fn neko_drop(name: *const c_char) -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_list(
+    names: *mut *mut *mut c_char, count: *mut u32) -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_stats(
     name: *const c_char, stats: *mut NekoStats) -> i32;
 
 // — Vectors —
 // len = number of f32 elements (must equal collection dim)
-#[no_mangle] pub extern "C" fn neko_insert(name: *const c_char, id: *const c_char,
+#[unsafe(no_mangle)] pub extern "C" fn neko_insert(name: *const c_char, id: *const c_char,
                                              vector: *const f32, len: u32,
                                              metadata: *const c_char) -> i32;
 // dim = collection dim (output vector must be pre-allocated)
-#[no_mangle] pub extern "C" fn neko_get_vector(name: *const c_char, id: *const c_char,
+#[unsafe(no_mangle)] pub extern "C" fn neko_get(name: *const c_char, id: *const c_char,
+                                             vector: *mut f32, dim: u32) -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_get_vector(name: *const c_char, id: *const c_char,
                                                  vector_out: *mut f32, dim: u32,
                                                  metadata_out: *mut NekoMetadata) -> i32;
-// lens[i] = number of f32 elements in vectors[i] (must equal collection dim)
-#[no_mangle] pub extern "C" fn neko_batch_insert(name: *const c_char,
-                                                   ids: *const *const c_char,
-                                                   vectors: *const f32,
-                                                   lens: *const u32,
-                                                   metadatas: *const *const c_char,
-                                                   count: u32) -> i32;
-#[no_mangle] pub extern "C" fn neko_upsert(name: *const c_char, id: *const c_char,
+// NekoInputVector is a `#[repr(C)]` struct: { id, vector, dim, metadata }.
+// All per-item pointers are `const` (input). count > 0; null name/items → InternalError.
+#[repr(C)]
+pub struct NekoInputVector {
+    pub id: *const c_char,
+    pub vector: *const f32,
+    pub dim: u32,
+    pub metadata: *const c_char,  // may be null
+}
+#[unsafe(no_mangle)] pub extern "C" fn neko_insert_many(
+    name: *const c_char,
+    input_vectors: *const NekoInputVector,
+    count: u32) -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_upsert(name: *const c_char, id: *const c_char,
                                              vector: *const f32, len: u32,
                                              metadata: *const c_char,
                                              created: *mut u8) -> i32;
-#[no_mangle] pub extern "C" fn neko_delete(name: *const c_char, id: *const c_char) -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_delete(name: *const c_char, id: *const c_char) -> i32;
 
 // — Search —
-// filter may be null → no metadata filtering
-#[no_mangle] pub extern "C" fn neko_search(name: *const c_char, query: *const f32,
+// filter is accepted in the REST request body but not yet evaluated (Phase 0.5+).
+#[unsafe(no_mangle)] pub extern "C" fn neko_search(name: *const c_char, query: *const f32,
                                              dim: u32, top_k: u32,
-                                             filter: *const c_char,
-                                             results: *mut NekoResult) -> i32;
+                                             results: *mut NekoSearchResult) -> i32;
 
 // — Memory —
-#[no_mangle] pub extern "C" fn neko_free_result(results: *mut NekoResult);
-#[no_mangle] pub extern "C" fn neko_free_strings(strings: *mut *mut c_char, count: u32);
-#[no_mangle] pub extern "C" fn neko_free_metadata(metadata: *mut NekoMetadata);
+#[unsafe(no_mangle)] pub extern "C" fn neko_free_result(results: *mut NekoSearchResult);
+#[unsafe(no_mangle)] pub extern "C" fn neko_free_strings(strings: *mut *mut c_char, count: u32);
+#[unsafe(no_mangle)] pub extern "C" fn neko_free_metadata(metadata: *mut NekoMetadata);
 
 // — Embeddings (Phase 2+) —
-#[no_mangle] pub extern "C" fn neko_embed(model_name: *const c_char,
+#[unsafe(no_mangle)] pub extern "C" fn neko_embed(model_name: *const c_char,
                                             text: *const c_char,
                                             vector: *mut f32,
                                             dim: *mut u32) -> i32;
-#[no_mangle] pub extern "C" fn neko_embed_batch(model_name: *const c_char,
+#[unsafe(no_mangle)] pub extern "C" fn neko_embed_batch(model_name: *const c_char,
                                                   texts: *const *const c_char,
                                                   count: u32,
                                                   vectors: *mut f32) -> i32;
 
 // — Model management (Phase 2+) —
-#[no_mangle] pub extern "C" fn neko_load_model(name: *const c_char,
+#[unsafe(no_mangle)] pub extern "C" fn neko_load_model(name: *const c_char,
                                                  path: *const c_char) -> i32;
-#[no_mangle] pub extern "C" fn neko_unload_model(name: *const c_char) -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_unload_model(name: *const c_char) -> i32;
 ```
 
 ## Concurrency Model

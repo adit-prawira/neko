@@ -1045,3 +1045,107 @@ func TestHandleGetVector(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleDeleteVector(t *testing.T) {
+	t.Run("given existing vector, then returns 204 with empty body", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_delete_existing"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodDelete, "/v1/collections/"+name+"/vectors/doc1", nil)
+		request.SetPathValue("name", name)
+		request.SetPathValue("id", "doc1")
+
+		server.HandleDeleteVector(recorder, request)
+
+		if recorder.Code != http.StatusNoContent {
+			t.Fatalf("expected status 204, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if recorder.Body.Len() != 0 {
+			t.Errorf("expected empty body for 204, got %d bytes: %s", recorder.Body.Len(), recorder.Body.String())
+		}
+	})
+
+	t.Run("given nonexistent collection, then returns 404 with HAIRBALL_NOT_FOUND", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_delete_no_clowder"
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodDelete, "/v1/collections/"+name+"/vectors/doc1", nil)
+		request.SetPathValue("name", name)
+		request.SetPathValue("id", "doc1")
+
+		server.HandleDeleteVector(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected status 404, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_NOT_FOUND" {
+			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+
+	t.Run("given existing collection but unknown id, then returns 404 with HAIRBALL_NOT_FOUND", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_delete_no_id"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodDelete, "/v1/collections/"+name+"/vectors/ghost", nil)
+		request.SetPathValue("name", name)
+		request.SetPathValue("id", "ghost")
+
+		server.HandleDeleteVector(recorder, request)
+
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected status 404, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if code := errorCode(t, recorder); code != "HAIRBALL_NOT_FOUND" {
+			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+
+	t.Run("given deleted vector, then subsequent get returns 404 with HAIRBALL_NOT_FOUND", func(t *testing.T) {
+		server := apiTestSetup(t)
+		name := "api_test_delete_then_get"
+		defer func() { _ = ffi.Drop(name) }()
+		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+
+		deleteRecorder := httptest.NewRecorder()
+		deleteRequest := httptest.NewRequest(http.MethodDelete, "/v1/collections/"+name+"/vectors/doc1", nil)
+		deleteRequest.SetPathValue("name", name)
+		deleteRequest.SetPathValue("id", "doc1")
+		server.HandleDeleteVector(deleteRecorder, deleteRequest)
+		if deleteRecorder.Code != http.StatusNoContent {
+			t.Fatalf("setup: expected delete to return 204, got %d: %s", deleteRecorder.Code, deleteRecorder.Body.String())
+		}
+
+		getRecorder := httptest.NewRecorder()
+		getRequest := httptest.NewRequest(http.MethodGet, "/v1/collections/"+name+"/vectors/doc1", nil)
+		getRequest.SetPathValue("name", name)
+		getRequest.SetPathValue("id", "doc1")
+		server.HandleGetVector(getRecorder, getRequest)
+
+		if getRecorder.Code != http.StatusNotFound {
+			t.Fatalf("expected get-after-delete to return 404, got %d: %s", getRecorder.Code, getRecorder.Body.String())
+		}
+		if code := errorCode(t, getRecorder); code != "HAIRBALL_NOT_FOUND" {
+			t.Errorf("expected HAIRBALL_NOT_FOUND, got %s", code)
+		}
+	})
+}

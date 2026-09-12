@@ -271,12 +271,7 @@ func (s *Server) HandleUpsertVector(rw http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "invalid request body")
 		return
-	}
-
-	if id == "" {
-		WriteHairball(rw, http.StatusBadRequest, shared.HairballInvalidName.String(), "id is required")
-		return
-	}
+	}	
 
 	created, err := ffi.Upsert(name, id, body.Vector, body.Metadata)
 	if err != nil {
@@ -293,4 +288,15 @@ func (s *Server) HandleUpsertVector(rw http.ResponseWriter, r *http.Request) {
 		ID:  id,
 		Dim: len(body.Vector),
 	})
+}
+
+func (s *Server) HandleDeleteVector(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	id  := r.PathValue("id")
+
+	if err := ffi.Delete(name, id); err != nil {
+		WriteFFIError(rw, err)
+		return
+	}
+	rw.WriteHeader(http.StatusNoContent)
 }

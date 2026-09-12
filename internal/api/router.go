@@ -18,6 +18,7 @@ func buildRoutes(s *Server) http.Handler {
 	mux.HandleFunc("POST /v1/collections/{name}/vectors", s.HandleInsertVector)
 	mux.HandleFunc("GET /v1/collections/{name}/vectors/{id}", s.HandleGetVector)
 	mux.HandleFunc("PUT /v1/collections/{name}/vectors/{id}", s.HandleUpsertVector)
+	mux.HandleFunc("DELETE /v1/collections/{name}/vectors/{id}", s.HandleDeleteVector)
 	mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
 		message := fmt.Sprintf("route %s %s is not found", r.Method, r.URL.Path)
 		WriteHairball(rw, http.StatusNotFound, shared.HairballNotFound.String(), message)

@@ -187,7 +187,8 @@ with 384 dimensions.
                                                    count: u32) -> i32;
 #[no_mangle] pub extern "C" fn neko_upsert(name: *const c_char, id: *const c_char,
                                              vector: *const f32, len: u32,
-                                             metadata: *const c_char) -> i32;
+                                             metadata: *const c_char,
+                                             created: *mut u8) -> i32;
 #[no_mangle] pub extern "C" fn neko_delete(name: *const c_char, id: *const c_char) -> i32;
 
 // — Search —

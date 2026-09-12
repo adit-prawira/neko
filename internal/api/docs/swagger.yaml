@@ -1,0 +1,446 @@
+definitions:
+  internal_api.APIError:
+    properties:
+      error:
+        $ref: '#/definitions/internal_api.HairballDetail'
+    type: object
+  internal_api.CollectionResponseHttpDTO:
+    properties:
+      dim:
+        type: integer
+      metric:
+        type: string
+      name:
+        type: string
+      storage_bytes:
+        type: integer
+      vector_count:
+        type: integer
+    type: object
+  internal_api.CollectionsResponseHttpDTO:
+    properties:
+      collections:
+        items:
+          $ref: '#/definitions/internal_api.CollectionResponseHttpDTO'
+        type: array
+    type: object
+  internal_api.CreateCollectionRequestHttpDTO:
+    properties:
+      dim:
+        type: integer
+      metric:
+        type: string
+      name:
+        type: string
+    type: object
+  internal_api.CreateCollectionResponseHttpDTO:
+    properties:
+      dim:
+        type: integer
+      metric:
+        type: string
+      name:
+        type: string
+    type: object
+  internal_api.GetVectorResponseHttpDTO:
+    properties:
+      id:
+        type: string
+      metadata:
+        type: string
+      vector:
+        items:
+          type: number
+        type: array
+    type: object
+  internal_api.HairballDetail:
+    properties:
+      code:
+        type: string
+      message:
+        type: string
+    type: object
+  internal_api.InsertManyVectorResponseHttpDTO:
+    properties:
+      dim:
+        type: integer
+      ids:
+        items:
+          type: string
+        type: array
+      inserted:
+        type: integer
+    type: object
+  internal_api.ScoredResultHttpDTO:
+    properties:
+      id:
+        type: string
+      score:
+        type: number
+    type: object
+  internal_api.SearchQueryParamsHttpDTO:
+    properties:
+      filter:
+        items:
+          type: integer
+        type: array
+      top_k:
+        type: integer
+      vector:
+        items:
+          type: number
+        type: array
+    type: object
+  internal_api.SearchResponseHttpDTO:
+    properties:
+      results:
+        items:
+          $ref: '#/definitions/internal_api.ScoredResultHttpDTO'
+        type: array
+    type: object
+  internal_api.UpsertVectorHttpDTO:
+    properties:
+      id:
+        type: string
+      metadata:
+        type: string
+      vector:
+        items:
+          type: number
+        type: array
+    type: object
+  internal_api.UpsertVectorResponseHttpDTO:
+    properties:
+      dim:
+        type: integer
+      id:
+        type: string
+    type: object
+host: localhost:3434
+info:
+  contact: {}
+  description: Local-first vector database REST API. Brute-force KNN search over raw
+    f32 vectors, with collection-scoped inserts and metadata.
+  title: Neko API
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      description: Returns ok if the engine has been initialised.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Neko Server is Healthy
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: engine not initialised
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Liveness check
+      tags:
+      - system
+  /v1/collections:
+    get:
+      description: Returns all collections with their dimension, metric, and vector
+        count.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.CollectionsResponseHttpDTO'
+      summary: List collections
+      tags:
+      - collections
+    post:
+      consumes:
+      - application/json
+      description: Creates a new named collection with a fixed dimension and distance
+        metric.
+      parameters:
+      - description: Collection config
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.CreateCollectionRequestHttpDTO'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_api.CreateCollectionResponseHttpDTO'
+        "400":
+          description: HAIRBALL_INVALID_NAME / HAIRBALL_INVALID_METRIC
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+        "409":
+          description: HAIRBALL_ALREADY_EXISTS
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Create a collection
+      tags:
+      - collections
+  /v1/collections/{name}:
+    delete:
+      description: Removes a collection and its data directory.
+      parameters:
+      - description: Collection name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: HAIRBALL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Drop a collection
+      tags:
+      - collections
+    get:
+      description: Returns stats for a single collection.
+      parameters:
+      - description: Collection name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.CollectionResponseHttpDTO'
+        "404":
+          description: HAIRBALL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Get collection info
+      tags:
+      - collections
+  /v1/collections/{name}/search:
+    post:
+      consumes:
+      - application/json
+      description: Brute-force KNN over the collection's vectors. Returns the top-k
+        results sorted by score.
+      parameters:
+      - description: Collection name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Search query
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.SearchQueryParamsHttpDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.SearchResponseHttpDTO'
+        "400":
+          description: HAIRBALL_DIM_MISMATCH / HAIRBALL_DIM_TOO_SMALL
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+        "404":
+          description: HAIRBALL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Search top-K nearest neighbors
+      tags:
+      - search
+  /v1/collections/{name}/vectors:
+    post:
+      consumes:
+      - application/json
+      description: Inserts a vector with a given ID. Fails if the ID already exists.
+      parameters:
+      - description: Collection name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Vector to insert (id is in the path; do not include in body)
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UpsertVectorHttpDTO'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_api.UpsertVectorResponseHttpDTO'
+        "400":
+          description: HAIRBALL_DIM_MISMATCH / HAIRBALL_DIM_TOO_SMALL
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+        "404":
+          description: HAIRBALL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+        "409":
+          description: HAIRBALL_ALREADY_EXISTS
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Insert a single vector
+      tags:
+      - vectors
+  /v1/collections/{name}/vectors/{id}:
+    delete:
+      description: Removes a vector by ID.
+      parameters:
+      - description: Collection name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Vector ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: HAIRBALL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Delete a vector
+      tags:
+      - vectors
+    get:
+      description: Returns the vector and its raw metadata JSON string.
+      parameters:
+      - description: Collection name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Vector ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.GetVectorResponseHttpDTO'
+        "404":
+          description: HAIRBALL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Get a vector by ID
+      tags:
+      - vectors
+    put:
+      consumes:
+      - application/json
+      description: Insert-or-update by ID. Returns 201 if the vector was created,
+        200 if an existing vector was replaced.
+      parameters:
+      - description: Collection name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Vector ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Vector data (id is in the path; do not include in body)
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api.UpsertVectorHttpDTO'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Vector updated
+          schema:
+            $ref: '#/definitions/internal_api.UpsertVectorResponseHttpDTO'
+        "201":
+          description: Vector created
+          schema:
+            $ref: '#/definitions/internal_api.UpsertVectorResponseHttpDTO'
+        "400":
+          description: HAIRBALL_DIM_MISMATCH / HAIRBALL_DIM_TOO_SMALL
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+        "404":
+          description: HAIRBALL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Insert or update a vector
+      tags:
+      - vectors
+  /v1/collections/{name}/vectors/batch:
+    post:
+      consumes:
+      - application/json
+      description: Inserts up to 10,000 vectors in one call. The request body is a
+        bare JSON array (no wrapping object). Each element must include `id` and `vector`.
+        All-or-nothing on dim and id validation.
+      parameters:
+      - description: Collection name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Array of vectors to insert (max 10,000)
+        in: body
+        name: body
+        required: true
+        schema:
+          items:
+            $ref: '#/definitions/internal_api.UpsertVectorHttpDTO'
+          type: array
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_api.InsertManyVectorResponseHttpDTO'
+        "400":
+          description: HAIRBALL_INVALID_NAME / HAIRBALL_DIM_MISMATCH
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+        "404":
+          description: HAIRBALL_NOT_FOUND
+          schema:
+            $ref: '#/definitions/internal_api.APIError'
+      summary: Batch insert vectors
+      tags:
+      - vectors
+schemes:
+- http
+swagger: "2.0"

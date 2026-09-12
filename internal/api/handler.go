@@ -1,3 +1,10 @@
+// Package api exposes the neko REST surface (HTTP/1.1, JSON).
+//
+//	@title			Neko API
+//	@version		0.1.0
+//	@description	Local-first vector database REST API. Brute-force KNN search over raw f32 vectors, with collection-scoped inserts and metadata.
+//	@host			localhost:3434
+//	@schemes		http
 package api
 
 import (
@@ -30,6 +37,15 @@ func (s *Server) ShutDown() error {
 	return ffi.ShutDown()
 }
 
+// HandleHealth godoc
+//
+//	@Summary		Liveness check
+//	@Description	Returns ok if the engine has been initialised.
+//	@Tags			system
+//	@Produce		json
+//	@Success		200	{object}	map[string]string	"Neko Server is Healthy"
+//	@Failure		503	{object}	APIError			"engine not initialised"
+//	@Router			/health [get]
 func (s *Server) HandleHealth(rw http.ResponseWriter, r *http.Request) {
 	if !s.isEngineReady.Load() {
 		WriteHairball(rw, http.StatusServiceUnavailable, shared.HairballInternalError.String(), "engine not initialised")
@@ -52,6 +68,18 @@ type CreateCollectionResponseHttpDTO struct {
 	Metric string `json:"metric"`
 }
 
+// HandleCreateCollection godoc
+//
+//	@Summary		Create a collection
+//	@Description	Creates a new named collection with a fixed dimension and distance metric.
+//	@Tags			collections
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		CreateCollectionRequestHttpDTO	true	"Collection config"
+//	@Success		201		{object}	CreateCollectionResponseHttpDTO
+//	@Failure		400		{object}	APIError	"HAIRBALL_INVALID_NAME / HAIRBALL_INVALID_METRIC"
+//	@Failure		409		{object}	APIError	"HAIRBALL_ALREADY_EXISTS"
+//	@Router			/v1/collections [post]
 func (s *Server) HandleCreateCollection(rw http.ResponseWriter, r *http.Request) {
 	var body CreateCollectionRequestHttpDTO
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -97,6 +125,14 @@ type CollectionsResponseHttpDTO struct {
 	Collections []CollectionResponseHttpDTO `json:"collections"`
 }
 
+// HandleGetCollections godoc
+//
+//	@Summary		List collections
+//	@Description	Returns all collections with their dimension, metric, and vector count.
+//	@Tags			collections
+//	@Produce		json
+//	@Success		200	{object}	CollectionsResponseHttpDTO
+//	@Router			/v1/collections [get]
 func (s *Server) HandleGetCollections(rw http.ResponseWriter, r *http.Request) {
 	names, err := ffi.List()
 	if err != nil {
@@ -125,6 +161,16 @@ func (s *Server) HandleGetCollections(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleGetCollection godoc
+//
+//	@Summary		Get collection info
+//	@Description	Returns stats for a single collection.
+//	@Tags			collections
+//	@Produce		json
+//	@Param			name	path		string	true	"Collection name"
+//	@Success		200		{object}	CollectionResponseHttpDTO
+//	@Failure		404		{object}	APIError	"HAIRBALL_NOT_FOUND"
+//	@Router			/v1/collections/{name} [get]
 func (s *Server) HandleGetCollection(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	stats, err := ffi.Stats(name)
@@ -142,6 +188,16 @@ func (s *Server) HandleGetCollection(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleDropCollection godoc
+//
+//	@Summary		Drop a collection
+//	@Description	Removes a collection and its data directory.
+//	@Tags			collections
+//	@Produce		json
+//	@Param			name	path	string	true	"Collection name"
+//	@Success		204		"No Content"
+//	@Failure		404		{object}	APIError	"HAIRBALL_NOT_FOUND"
+//	@Router			/v1/collections/{name} [delete]
 func (s *Server) HandleDropCollection(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := ffi.Drop(name); err != nil {
@@ -169,6 +225,19 @@ type SearchResponseHttpDTO struct {
 
 const defaultTopK uint32 = 10
 
+// HandleSearchCollection godoc
+//
+//	@Summary		Search top-K nearest neighbors
+//	@Description	Brute-force KNN over the collection's vectors. Returns the top-k results sorted by score.
+//	@Tags			search
+//	@Accept			json
+//	@Produce		json
+//	@Param			name	path		string						true	"Collection name"
+//	@Param			body	body		SearchQueryParamsHttpDTO	true	"Search query"
+//	@Success		200		{object}	SearchResponseHttpDTO
+//	@Failure		400		{object}	APIError	"HAIRBALL_DIM_MISMATCH / HAIRBALL_DIM_TOO_SMALL"
+//	@Failure		404		{object}	APIError	"HAIRBALL_NOT_FOUND"
+//	@Router			/v1/collections/{name}/search [post]
 func (s *Server) HandleSearchCollection(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var body SearchQueryParamsHttpDTO
@@ -211,6 +280,20 @@ type UpsertVectorResponseHttpDTO struct {
 	Dim int    `json:"dim"`
 }
 
+// HandleInsertVector godoc
+//
+//	@Summary		Insert a single vector
+//	@Description	Inserts a vector with a given ID. Fails if the ID already exists.
+//	@Tags			vectors
+//	@Accept			json
+//	@Produce		json
+//	@Param			name	path		string				true	"Collection name"
+//	@Param			body	body		UpsertVectorHttpDTO	true	"Vector to insert (id is in the path; do not include in body)"
+//	@Success		201		{object}	UpsertVectorResponseHttpDTO
+//	@Failure		400		{object}	APIError	"HAIRBALL_DIM_MISMATCH / HAIRBALL_DIM_TOO_SMALL"
+//	@Failure		404		{object}	APIError	"HAIRBALL_NOT_FOUND"
+//	@Failure		409		{object}	APIError	"HAIRBALL_ALREADY_EXISTS"
+//	@Router			/v1/collections/{name}/vectors [post]
 func (s *Server) HandleInsertVector(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var body UpsertVectorHttpDTO
@@ -243,6 +326,19 @@ type InsertManyVectorResponseHttpDTO struct {
 	Dim      uint32   `json:"dim"`
 }
 
+// HandleInsertManyVector godoc
+//
+//	@Summary		Batch insert vectors
+//	@Description	Inserts up to 10,000 vectors in one call. The request body is a bare JSON array (no wrapping object). Each element must include `id` and `vector`. All-or-nothing on dim and id validation.
+//	@Tags			vectors
+//	@Accept			json
+//	@Produce		json
+//	@Param			name	path		string					true	"Collection name"
+//	@Param			body	body		[]UpsertVectorHttpDTO	true	"Array of vectors to insert (max 10,000)"
+//	@Success		201		{object}	InsertManyVectorResponseHttpDTO
+//	@Failure		400		{object}	APIError	"HAIRBALL_INVALID_NAME / HAIRBALL_DIM_MISMATCH"
+//	@Failure		404		{object}	APIError	"HAIRBALL_NOT_FOUND"
+//	@Router			/v1/collections/{name}/vectors/batch [post]
 func (s *Server) HandleInsertManyVector(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var body []UpsertVectorHttpDTO
@@ -315,6 +411,17 @@ type GetVectorResponseHttpDTO struct {
 	Metadata string    `json:"metadata,omitempty"`
 }
 
+// HandleGetVector godoc
+//
+//	@Summary		Get a vector by ID
+//	@Description	Returns the vector and its raw metadata JSON string.
+//	@Tags			vectors
+//	@Produce		json
+//	@Param			name	path		string	true	"Collection name"
+//	@Param			id		path		string	true	"Vector ID"
+//	@Success		200		{object}	GetVectorResponseHttpDTO
+//	@Failure		404		{object}	APIError	"HAIRBALL_NOT_FOUND"
+//	@Router			/v1/collections/{name}/vectors/{id} [get]
 func (s *Server) HandleGetVector(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
@@ -338,6 +445,21 @@ func (s *Server) HandleGetVector(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleUpsertVector godoc
+//
+//	@Summary		Insert or update a vector
+//	@Description	Insert-or-update by ID. Returns 201 if the vector was created, 200 if an existing vector was replaced.
+//	@Tags			vectors
+//	@Accept			json
+//	@Produce		json
+//	@Param			name	path		string						true	"Collection name"
+//	@Param			id		path		string						true	"Vector ID"
+//	@Param			body	body		UpsertVectorHttpDTO			true	"Vector data (id is in the path; do not include in body)"
+//	@Success		200		{object}	UpsertVectorResponseHttpDTO	"Vector updated"
+//	@Success		201		{object}	UpsertVectorResponseHttpDTO	"Vector created"
+//	@Failure		400		{object}	APIError					"HAIRBALL_DIM_MISMATCH / HAIRBALL_DIM_TOO_SMALL"
+//	@Failure		404		{object}	APIError					"HAIRBALL_NOT_FOUND"
+//	@Router			/v1/collections/{name}/vectors/{id} [put]
 func (s *Server) HandleUpsertVector(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")
@@ -365,6 +487,17 @@ func (s *Server) HandleUpsertVector(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleDeleteVector godoc
+//
+//	@Summary		Delete a vector
+//	@Description	Removes a vector by ID.
+//	@Tags			vectors
+//	@Produce		json
+//	@Param			name	path	string	true	"Collection name"
+//	@Param			id		path	string	true	"Vector ID"
+//	@Success		204		"No Content"
+//	@Failure		404		{object}	APIError	"HAIRBALL_NOT_FOUND"
+//	@Router			/v1/collections/{name}/vectors/{id} [delete]
 func (s *Server) HandleDeleteVector(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	id := r.PathValue("id")

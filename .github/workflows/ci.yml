@@ -57,6 +57,21 @@ jobs:
       - name: install swag
         run: go install github.com/swaggo/swag/cmd/swag@v1.16.3
 
+      - name: install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+
+      - name: install protoc-gen-go-grpc
+        run: go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+      - name: add go bin to path
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: go mod download
+        run: go mod download
+
       - name: build
         run: make build
 

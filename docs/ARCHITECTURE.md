@@ -56,17 +56,32 @@
 
 **Build chain:**
 ```
-make
-  1. cc simd/distance.c → simd/distance.o
-  2. cargo build --release (build.rs links distance.o into libneko_engine.dylib)
-  3. go build -o neko ./cmd/neko (cgo links libneko_engine.dylib)
+make build
+  1. swag init -g internal/api/handler.go -o internal/api/docs (regenerates OpenAPI spec + embedded binary)
+  2. ./proto/gen.sh (regenerates internal/gen/neko/v1/*.pb.go from proto/neko.proto)
+  3. cd simd && make → simd/distance.o
+  4. cd engine && cargo build --release (build.rs links distance.o into libneko_engine.dylib)
+  5. CGO_LDFLAGS=... go build -o neko ./cmd/neko (cgo links libneko_engine.dylib)
   → Single static binary: ./neko
 ```
 
-The `make build` target depends on a `swag` target that runs `swag init` to
-regenerate `internal/api/docs/` (OpenAPI spec + embedded binary) before the
-Go binary is compiled. The spec is served at runtime by `http-swagger`
-middleware mounted at `GET /swagger/`.
+The `swag` target regenerates `internal/api/docs/` (OpenAPI 2.0 spec embedded into the binary) and is served at runtime by `http-swagger` middleware mounted at `GET /swagger/`. The `proto` target regenerates `internal/gen/neko/v1/*.pb.go` from `proto/neko.proto`; generated files are gitignored and the directory is tracked via `.gitkeep`.
+
+## Transport Multiplexing (REST + gRPC on the same port)
+
+`neko serve` binds a single TCP listener on `:3434` and dispatches incoming connections by protocol framing:
+
+```
+net.Listen(":3434")
+    └── cmux.New(listener)
+          ├── cmux.HTTP2()      → *grpc.Server (reflection + future RPCs)
+          ├── cmux.HTTP1Fast()  → *http.Server (REST routes)
+          └── cmux.Any()        → immediate close (unknown protocols)
+```
+
+Both servers share the same engine — REST handlers call `internal/ffi.X()` directly; future gRPC handlers (PRs #35, #36) call the same FFI functions. cmux uses HTTP/2 preface detection (`PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`) to route gRPC traffic; everything that doesn't match goes to the REST listener; the catch-all closes anything that doesn't look like either. The lifecycle is owned by `internal/server.Start()` (signal handling, graceful shutdown of both sub-servers, parent-listener close to unblock cmux).
+
+**Known limitation:** `cmux.HTTP2()` peeks the connection preface. Java gRPC clients that block on receiving a server `SETTINGS` frame before sending their own preface can deadlock against the peeker. Mitigation deferred — Go and Python clients work fine.
 
 ## Disk Layout
 

@@ -460,29 +460,25 @@ Additional model-specific codes:
 
 ## gRPC
 
-*Planned — not yet implemented. The service definition below shows the intended shape; no `proto/neko.proto` or `internal/api/grpc.go` exists in v0.1.*
+*Scaffold shipped in PR #37. The proto contract is in `proto/neko.proto`; generated Go stubs land in `internal/gen/neko/v1/`. Both REST and gRPC accept connections on `:3434` via cmux HTTP/2 multiplexing — see the [Architecture](ARCHITECTURE.md#transport-multiplexing-rest--grpc-on-the-same-port) doc.*
 
-The gRPC API mirrors the REST API exactly. Service definition:
+The gRPC surface mirrors the REST surface exactly. **Source of truth for the contract: `proto/neko.proto`.** Two services, 10 RPCs:
 
-```protobuf
-service Neko {
-  rpc CreateCollection(CreateCollectionRequest) returns (Collection);
-  rpc DropCollection(DropCollectionRequest) returns (DropCollectionResponse);
-  rpc ListCollections(ListCollectionsRequest) returns (ListCollectionsResponse);
-  rpc GetCollection(GetCollectionRequest) returns (Collection);
+- `CollectionService` — `Create` / `List` / `Get` / `Drop` / `Search`
+- `VectorService` — `Insert` / `InsertMany` / `Get` / `Upsert` / `Delete`
 
-  rpc InsertVector(InsertVectorRequest) returns (InsertVectorResponse);
-  rpc BatchInsertVectors(BatchInsertRequest) returns (BatchInsertResponse);
-  rpc UpsertVector(UpsertVectorRequest) returns (UpsertVectorResponse);
-  rpc SearchVectors(SearchRequest) returns (SearchResponse);
-  rpc DeleteVector(DeleteVectorRequest) returns (DeleteVectorResponse);
+Request and response messages mirror the `*HttpDTO` shapes in `internal/api/handler.go` field-for-field. The only structural differences are transport-forced: REST path parameters (`{name}`, `{id}`) become message fields; the REST bare-array body of `POST /v1/collections/{name}/vectors/batch` becomes `InsertManyVectorRequest.vectors` (wrapped, since gRPC can't send a bare array); the REST HTTP 201-vs-200 status code distinction on `Upsert` is collapsed in gRPC (the client picks `Insert` vs `Upsert` to express intent).
 
-  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+**Current state:** the gRPC server is registered with reflection only — every RPC returns `Unimplemented` until PR #35 (CollectionService + VectorService handlers) and PR #36 (SearchService + `HAIRBALL_*` → gRPC status code mapping) land. `grpcurl -plaintext localhost:3434 list` shows the registered services now.
 
-  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
-  rpc PullModel(PullModelRequest) returns (PullModelResponse);
-}
-```
+`error.message` from the REST surface maps to gRPC `status.message`, and the `HAIRBALL_*` code becomes the gRPC status code as follows (PR #36):
+
+| Hairball | gRPC status |
+|---|---|
+| `HAIRBALL_INVALID_NAME`, `HAIRBALL_INVALID_METRIC`, `HAIRBALL_DIM_MISMATCH`, `HAIRBALL_DIM_TOO_LARGE` | `InvalidArgument` |
+| `HAIRBALL_NOT_FOUND` | `NotFound` |
+| `HAIRBALL_ALREADY_EXISTS` | `AlreadyExists` |
+| `HAIRBALL_INTERNAL_ERROR` | `Internal` |
 
 ---
 

@@ -460,7 +460,7 @@ Additional model-specific codes:
 
 ## gRPC
 
-*Scaffold shipped in PR #37. The proto contract is in `proto/neko.proto`; generated Go stubs land in `internal/gen/neko/v1/`. Both REST and gRPC accept connections on `:3434` via cmux HTTP/2 multiplexing — see the [Architecture](ARCHITECTURE.md#transport-multiplexing-rest--grpc-on-the-same-port) doc.*
+*9 collection + vector RPCs shipped in PR #38 (proto + cmux + reflection scaffolded in PR #37). The proto contract is in `proto/neko.proto`; generated Go stubs land in `internal/gen/neko/v1/`. Both REST and gRPC accept connections on `:3434` via cmux HTTP/2 multiplexing — see the [Architecture](ARCHITECTURE.md#transport-multiplexing-rest--grpc-on-the-same-port) doc.*
 
 The gRPC surface mirrors the REST surface exactly. **Source of truth for the contract: `proto/neko.proto`.** Two services, 10 RPCs:
 
@@ -469,16 +469,16 @@ The gRPC surface mirrors the REST surface exactly. **Source of truth for the con
 
 Request and response messages mirror the `*HttpDTO` shapes in `internal/api/handler.go` field-for-field. The only structural differences are transport-forced: REST path parameters (`{name}`, `{id}`) become message fields; the REST bare-array body of `POST /v1/collections/{name}/vectors/batch` becomes `InsertManyVectorRequest.vectors` (wrapped, since gRPC can't send a bare array); the REST HTTP 201-vs-200 status code distinction on `Upsert` is collapsed in gRPC (the client picks `Insert` vs `Upsert` to express intent).
 
-**Current state:** the gRPC server is registered with reflection only — every RPC returns `Unimplemented` until PR #35 (CollectionService + VectorService handlers) and PR #36 (SearchService + `HAIRBALL_*` → gRPC status code mapping) land. `grpcurl -plaintext localhost:3434 list` shows the registered services now.
+**Current state:** CollectionService + VectorService handlers are live (PR #38). Full `HAIRBALL_*` → gRPC status coverage and the REST/gRPC parity integration test land in PR #36. `grpcurl -plaintext localhost:3434 list` shows both `neko.v1.CollectionService` and `neko.v1.VectorService`.
 
-`error.message` from the REST surface maps to gRPC `status.message`, and the `HAIRBALL_*` code becomes the gRPC status code as follows (PR #36):
+`error.message` from the REST surface maps to gRPC `status.message`, and the `HAIRBALL_*` code becomes the gRPC status code as follows (PR #38 table, expanded in PR #36):
 
 | Hairball | gRPC status |
 |---|---|
-| `HAIRBALL_INVALID_NAME`, `HAIRBALL_INVALID_METRIC`, `HAIRBALL_DIM_MISMATCH`, `HAIRBALL_DIM_TOO_LARGE` | `InvalidArgument` |
+| `HAIRBALL_INVALID_NAME`, `HAIRBALL_INVALID_METRIC`, `HAIRBALL_DIM_MISMATCH`, `HAIRBALL_DIM_TOO_LARGE`, `HAIRBALL_DIM_TOO_SMALL` | `InvalidArgument` |
 | `HAIRBALL_NOT_FOUND` | `NotFound` |
 | `HAIRBALL_ALREADY_EXISTS` | `AlreadyExists` |
-| `HAIRBALL_INTERNAL_ERROR` | `Internal` |
+| `HAIRBALL_INTERNAL_ERROR`, `HAIRBALL_IO_ERROR`, `HAIRBALL_SERIALIZE_ERROR`, `HAIRBALL_CORRUPTED_SEGMENT` | `Internal` |
 
 ---
 

@@ -79,7 +79,7 @@ net.Listen(":3434")
           └── cmux.Any()        → immediate close (unknown protocols)
 ```
 
-Both servers share the same engine — REST handlers call `internal/ffi.X()` directly; future gRPC handlers (PRs #35, #36) call the same FFI functions. cmux uses HTTP/2 preface detection (`PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`) to route gRPC traffic; everything that doesn't match goes to the REST listener; the catch-all closes anything that doesn't look like either. The lifecycle is owned by `internal/server.Start()` (signal handling, graceful shutdown of both sub-servers, parent-listener close to unblock cmux).
+Both servers share the same engine — REST handlers and gRPC handlers (PR #38) both call `internal/ffi.X()` directly. cmux uses HTTP/2 preface detection (`PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n`) to route gRPC traffic; everything that doesn't match goes to the REST listener; the catch-all closes anything that doesn't look like either. The lifecycle is owned by `internal/server.Start()` (signal handling, graceful shutdown of both sub-servers, parent-listener close to unblock cmux).
 
 **Known limitation:** `cmux.HTTP2()` peeks the connection preface. Java gRPC clients that block on receiving a server `SETTINGS` frame before sending their own preface can deadlock against the peeker. Mitigation deferred — Go and Python clients work fine.
 

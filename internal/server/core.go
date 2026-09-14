@@ -47,6 +47,7 @@ func Start(cfg Config) error {
 
 	httpServer := api.NewHttpServer(apiServer)
 	grpcServer := grpcserver.NewGRPCServer()
+	grpcserver.RegisterServices(grpcServer)
 
 	errChannel := make(chan error, 4)
 	go func() { errChannel <- httpServer.Serve(httpListener) }()

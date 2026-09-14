@@ -1,6 +1,10 @@
 package shared
 
-import "testing"
+import (
+	"testing"
+
+	"google.golang.org/grpc/codes"
+)
 
 func TestHairballErrorCodeRoundTrip(t *testing.T) {
 	cases := []struct {
@@ -8,22 +12,23 @@ func TestHairballErrorCodeRoundTrip(t *testing.T) {
 		intVal int
 		strVal string
 		http   int
+		grpc   codes.Code
 	}{
-		{HairballNotFound, 1, "HAIRBALL_NOT_FOUND", 404},
-		{HairballAlreadyExists, 2, "HAIRBALL_ALREADY_EXISTS", 409},
-		{HairballDimMismatch, 3, "HAIRBALL_DIM_MISMATCH", 400},
-		{HairballDimTooLarge, 4, "HAIRBALL_DIM_TOO_LARGE", 400},
-		{HairballDimTooSmall, 5, "HAIRBALL_DIM_TOO_SMALL", 400},
-		{HairballInvalidName, 6, "HAIRBALL_INVALID_NAME", 400},
-		{HairballIOError, 7, "HAIRBALL_IO_ERROR", 500},
-		{HairballSerializeError, 8, "HAIRBALL_SERIALIZE_ERROR", 500},
-		{HairballCorruptedSegment, 9, "HAIRBALL_CORRUPTED_SEGMENT", 500},
-		{HairballInternalError, 10, "HAIRBALL_INTERNAL_ERROR", 500},
-		{HairballInvalidMetric, 11, "HAIRBALL_INVALID_METRIC", 400},
+		{HairballNotFound, 1, "HAIRBALL_NOT_FOUND", 404, codes.NotFound},
+		{HairballAlreadyExists, 2, "HAIRBALL_ALREADY_EXISTS", 409, codes.AlreadyExists},
+		{HairballDimMismatch, 3, "HAIRBALL_DIM_MISMATCH", 400, codes.InvalidArgument},
+		{HairballDimTooLarge, 4, "HAIRBALL_DIM_TOO_LARGE", 400, codes.InvalidArgument},
+		{HairballDimTooSmall, 5, "HAIRBALL_DIM_TOO_SMALL", 400, codes.InvalidArgument},
+		{HairballInvalidName, 6, "HAIRBALL_INVALID_NAME", 400, codes.InvalidArgument},
+		{HairballIOError, 7, "HAIRBALL_IO_ERROR", 500, codes.Internal},
+		{HairballSerializeError, 8, "HAIRBALL_SERIALIZE_ERROR", 500, codes.Internal},
+		{HairballCorruptedSegment, 9, "HAIRBALL_CORRUPTED_SEGMENT", 500, codes.Internal},
+		{HairballInternalError, 10, "HAIRBALL_INTERNAL_ERROR", 500, codes.Internal},
+		{HairballInvalidMetric, 11, "HAIRBALL_INVALID_METRIC", 400, codes.InvalidArgument},
 	}
 
 	for _, tc := range cases {
-		t.Run("given "+tc.strVal+", then Int/String/Http map match", func(t *testing.T) {
+		t.Run("given "+tc.strVal+", then Int/String/Http/GRPC maps match", func(t *testing.T) {
 			if got := tc.code.Int(); got != tc.intVal {
 				t.Errorf("Int(): got %d, want %d", got, tc.intVal)
 			}
@@ -35,6 +40,9 @@ func TestHairballErrorCodeRoundTrip(t *testing.T) {
 			}
 			if got := HairballCodeToHTTP[tc.intVal]; got != tc.http {
 				t.Errorf("HairballCodeToHTTP[%d]: got %d, want %d", tc.intVal, got, tc.http)
+			}
+			if got := HairballToGRPC[tc.intVal]; got != tc.grpc {
+				t.Errorf("HairballToGRPC[%d]: got %v, want %v", tc.intVal, got, tc.grpc)
 			}
 		})
 	}

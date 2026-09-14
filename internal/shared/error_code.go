@@ -1,6 +1,10 @@
 package shared
 
-import "net/http"
+import (
+	"net/http"
+
+	"google.golang.org/grpc/codes"
+)
 
 type HairballErrorCode string
 
@@ -77,4 +81,18 @@ var HairballCodeToHTTP = map[int]int{
 	9:  http.StatusInternalServerError,
 	10: http.StatusInternalServerError,
 	11: http.StatusBadRequest,
+}
+
+var HairballToGRPC = map[int]codes.Code{
+	1:  codes.NotFound,
+	2:  codes.AlreadyExists,
+	3:  codes.InvalidArgument,
+	4:  codes.InvalidArgument,
+	5:  codes.InvalidArgument,
+	6:  codes.InvalidArgument,
+	7:  codes.Internal,
+	8:  codes.Internal,
+	9:  codes.Internal,
+	10: codes.Internal,
+	11: codes.InvalidArgument,
 }

@@ -3,8 +3,8 @@ package grpcserver
 import (
 	"testing"
 
-	nekov1 "github.com/adit-prawira/neko/internal/gen/neko/v1"
 	"github.com/adit-prawira/neko/internal/ffi"
+	nekov1 "github.com/adit-prawira/neko/internal/gen/neko/v1"
 )
 
 func TestProtoMetricToFFI(t *testing.T) {

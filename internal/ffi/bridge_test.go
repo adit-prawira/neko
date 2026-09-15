@@ -508,7 +508,26 @@ func TestUpsertEmptyVectorReturnsHairballError(t *testing.T) {
 }
 
 func TestUpsertRoundTripsMetadata(t *testing.T) {
-	t.Skip("pre-existing bug: neko_upsert FFI parses metadata as VectorMetadata struct instead of treating it as opaque custom JSON, unlike neko_insert. FFI fix needed before this can pass.")
+	testInit(t)
+	testCleanup("go_test_upsert_metadata")
+
+	if err := Create("go_test_upsert_metadata", 3, MetricL2, ""); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	metadata := `{"author":"alice","tags":["a","b"],"score":0.5}`
+	vector := []float32{1.0, 2.0, 3.0}
+	if _, err := Upsert("go_test_upsert_metadata", "doc1", vector, metadata); err != nil {
+		t.Fatalf("Upsert failed: %v", err)
+	}
+
+	_, gotMetadata, err := GetVector("go_test_upsert_metadata", "doc1", 3)
+	if err != nil {
+		t.Fatalf("GetVector failed: %v", err)
+	}
+	if gotMetadata != metadata {
+		t.Errorf("metadata round-trip mismatch:\n got:  %s\n want: %s", gotMetadata, metadata)
+	}
 }
 
 func TestInsertManyRoundTrips(t *testing.T) {

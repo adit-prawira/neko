@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -443,4 +444,242 @@ func TestServeCommandDataDirFlag(t *testing.T) {
 	if dataDirFlag.DefValue == "" {
 		t.Error("expected non-empty default for 'data-dir' flag")
 	}
+}
+
+func TestStatsCommandRegistered(t *testing.T) {
+	root := NewRootCommand()
+
+	found := false
+	for _, subcommand := range root.Commands() {
+		if subcommand.Use == "stats" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'stats' subcommand to be registered")
+	}
+}
+
+func TestStatsCommandJSONFlag(t *testing.T) {
+	root := NewRootCommand()
+
+	statsCommand, _, err := root.Find([]string{"stats"})
+	if err != nil {
+		t.Fatalf("expected stats command to exist: %v", err)
+	}
+
+	jsonFlag := statsCommand.Flags().Lookup("json")
+	if jsonFlag == nil {
+		t.Fatal("expected 'json' flag on stats command")
+	}
+	if jsonFlag.Value.Type() != "bool" {
+		t.Errorf("expected json flag to be bool, got %q", jsonFlag.Value.Type())
+	}
+	if jsonFlag.DefValue != "false" {
+		t.Errorf("expected json flag default false, got %q", jsonFlag.DefValue)
+	}
+}
+
+func TestStatsCommandEmpty(t *testing.T) {
+	dir := cliSetup(t)
+	defer os.RemoveAll(dir)
+	resetEngineState(t)
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+
+	cmd.SetArgs([]string{"stats"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("stats command failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Collection") {
+		t.Errorf("expected header in empty stats output, got %q", output)
+	}
+
+	jsonCmd := NewRootCommand()
+	jsonBuf := new(bytes.Buffer)
+	jsonCmd.SetOut(jsonBuf)
+	jsonCmd.SetArgs([]string{"stats", "--json"})
+	if err := jsonCmd.Execute(); err != nil {
+		t.Fatalf("stats --json command failed: %v", err)
+	}
+
+	jsonOutput := strings.TrimSpace(jsonBuf.String())
+	var parsed struct {
+		Collections []map[string]any `json:"collections"`
+	}
+	if err := json.Unmarshal([]byte(jsonOutput), &parsed); err != nil {
+		t.Fatalf("stats --json output is not valid JSON: %v\noutput: %s", err, jsonOutput)
+	}
+	if len(parsed.Collections) != 0 {
+		t.Errorf("expected empty collections array, got %d entries", len(parsed.Collections))
+	}
+}
+
+func resetEngineState(t *testing.T) {
+	t.Helper()
+	names, err := ffi.List()
+	if err != nil {
+		t.Fatalf("ffi.List: %v", err)
+	}
+	for _, name := range names {
+		if err := ffi.Drop(name); err != nil {
+			t.Fatalf("ffi.Drop(%q): %v", name, err)
+		}
+	}
+}
+
+func TestStatsCommandWithCollections(t *testing.T) {
+	dir := cliSetup(t)
+	defer os.RemoveAll(dir)
+	resetEngineState(t)
+
+	if err := ffi.Create("stats_test_docs", 384, ffi.MetricCosine, ""); err != nil {
+		t.Fatalf("create docs failed: %v", err)
+	}
+	if err := ffi.Create("stats_test_images", 768, ffi.MetricL2, ""); err != nil {
+		t.Fatalf("create images failed: %v", err)
+	}
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+
+	cmd.SetArgs([]string{"stats"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("stats command failed: %v", err)
+	}
+
+	output := buf.String()
+	for _, headerWord := range []string{"Collection", "Dim", "Vectors", "Disk", "Segments"} {
+		if !strings.Contains(output, headerWord) {
+			t.Errorf("expected header word %q in output, got %q", headerWord, output)
+		}
+	}
+	if !strings.Contains(output, "stats_test_docs") {
+		t.Errorf("expected stats_test_docs in output, got %q", output)
+	}
+	if !strings.Contains(output, "stats_test_images") {
+		t.Errorf("expected stats_test_images in output, got %q", output)
+	}
+	if !strings.Contains(output, "384") {
+		t.Errorf("expected dim 384 in output, got %q", output)
+	}
+	if !strings.Contains(output, "768") {
+		t.Errorf("expected dim 768 in output, got %q", output)
+	}
+}
+
+func TestStatsCommandJSON(t *testing.T) {
+	dir := cliSetup(t)
+	defer os.RemoveAll(dir)
+	resetEngineState(t)
+
+	if err := ffi.Create("stats_test_json", 128, ffi.MetricDot, ""); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+
+	cmd.SetArgs([]string{"stats", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("stats --json command failed: %v", err)
+	}
+
+	output := strings.TrimSpace(buf.String())
+	var parsed struct {
+		Collections []map[string]any `json:"collections"`
+	}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		t.Fatalf("stats --json output is not valid JSON: %v\noutput: %s", err, output)
+	}
+	if len(parsed.Collections) != 1 {
+		t.Fatalf("expected 1 collection in JSON, got %d", len(parsed.Collections))
+	}
+
+	row := parsed.Collections[0]
+	if nameValue, ok := row["name"].(string); !ok || nameValue != "stats_test_json" {
+		t.Errorf("expected name=%q in JSON row, got: %v", "stats_test_json", row["name"])
+	}
+	if dimValue, ok := row["dim"].(float64); !ok || dimValue != 128 {
+		t.Errorf("expected dim=128 in JSON row, got: %v", row["dim"])
+	}
+	if metricValue, ok := row["metric"].(string); !ok || metricValue != "dot" {
+		t.Errorf("expected metric=%q in JSON row, got: %v", "dot", row["metric"])
+	}
+	for _, field := range []string{"vector_count", "storage_bytes", "segments"} {
+		if _, ok := row[field]; !ok {
+			t.Errorf("expected field %q in JSON row, got keys: %v", field, mapKeys(row))
+		}
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	cases := []struct {
+		input    uint64
+		expected string
+	}{
+		{0, "0B"},
+		{1, "1B"},
+		{1023, "1023B"},
+		{1024, "1KB"},
+		{1024 * 1024 - 1, "1023KB"},
+		{1024 * 1024, "1MB"},
+		{1024 * 1024 * 1024 - 1, "1023MB"},
+		{1024 * 1024 * 1024, "1GB"},
+	}
+	for _, testCase := range cases {
+		got := formatBytes(testCase.input)
+		if got != testCase.expected {
+			t.Errorf("formatBytes(%d) = %q, want %q", testCase.input, got, testCase.expected)
+		}
+	}
+}
+
+func TestCountSegments(t *testing.T) {
+	dir := filepath.Join(os.TempDir(), "neko_test_count_segments")
+	os.RemoveAll(dir)
+	defer os.RemoveAll(dir)
+
+	emptyCollection := filepath.Join(dir, "collections", "empty_collection")
+	if err := os.MkdirAll(emptyCollection, 0755); err != nil {
+		t.Fatalf("mkdir empty collection: %v", err)
+	}
+
+	withSegments := filepath.Join(dir, "collections", "with_segments")
+	if err := os.MkdirAll(withSegments, 0755); err != nil {
+		t.Fatalf("mkdir with_segments: %v", err)
+	}
+	for _, fileName := range []string{"data.vec", "data.meta", "data.vix"} {
+		if err := os.WriteFile(filepath.Join(withSegments, fileName), []byte("dummy"), 0644); err != nil {
+			t.Fatalf("write %s: %v", fileName, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(withSegments, "README.txt"), []byte("ignore me"), 0644); err != nil {
+		t.Fatalf("write README.txt: %v", err)
+	}
+
+	if got := countSegments(dir, "empty_collection"); got != 0 {
+		t.Errorf("countSegments(empty_collection) = %d, want 0", got)
+	}
+	if got := countSegments(dir, "with_segments"); got != 3 {
+		t.Errorf("countSegments(with_segments) = %d, want 3", got)
+	}
+	if got := countSegments(dir, "nonexistent_collection"); got != 0 {
+		t.Errorf("countSegments(nonexistent_collection) = %d, want 0", got)
+	}
+}
+
+func mapKeys(input map[string]any) []string {
+	keys := make([]string, 0, len(input))
+	for key := range input {
+		keys = append(keys, key)
+	}
+	return keys
 }

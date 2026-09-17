@@ -6,7 +6,7 @@ engine/target/
 *.dylib
 *.so
 simd/test_*
-
+.env
 # — Embedded model —
 engine/models/*.onnx
 engine/models/*.onnx.gz

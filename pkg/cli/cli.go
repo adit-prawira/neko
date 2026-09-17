@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"unsafe"
 
+	"github.com/adit-prawira/neko/internal/config"
 	"github.com/adit-prawira/neko/internal/ffi"
 	"github.com/adit-prawira/neko/internal/server"
 	"github.com/spf13/cobra"
@@ -316,9 +317,39 @@ func newServeCmd() *cobra.Command {
 		Short: "Start the neko REST server",
 		Long:  "Start the neko REST server on the configured port with graceful shutdown.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			portFlag := cmd.Flags().Lookup("port")
+			dataDirectoryFlag := cmd.Flags().Lookup("data-dir")
+			isPortChanged := portFlag != nil && portFlag.Changed
+			isDataDirectoryChanged := dataDirectoryFlag != nil && dataDirectoryFlag.Changed
+
+			configPath := filepath.Join(dataDirectory, "config.toml")
+			loadedConfig, err := config.Load(configPath)
+			if err != nil {
+				return err
+			}
+			resolved, err := config.Resolve(loadedConfig, config.ResolveDTO{
+				Port: config.Property[int]{
+					Value:     port,
+					IsChanged: isPortChanged,
+				},
+				DataDirectory: config.Property[string]{
+					Value:     dataDirectory,
+					IsChanged: isDataDirectoryChanged,
+				},
+				EnvDataDirectory: os.Getenv("NEKO_HOME"),
+			})
+
+			if err != nil {
+				return err
+			}
+
+			if resolved.DataDirectory == "" {
+				resolved.DataDirectory = ffi.DefaultDataDirectory()
+			}
+
 			return server.Start(server.Config{
-				Port:          port,
-				DataDirectory: dataDirectory,
+				Port:          resolved.Port,
+				DataDirectory: resolved.DataDirectory,
 			})
 		},
 	}

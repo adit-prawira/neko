@@ -52,7 +52,7 @@
 |----------|--------|-----|
 | Go ↔ Rust | cgo (C ABI) | Go main binary links Rust `cdylib`. Nanosecond FFI overhead. |
 | Rust ↔ C SIMD | `extern "C"` + `cc` crate in `build.rs` | C kernels compiled into the Rust `.dylib`. Linked at Rust compile time. |
-| Go → Go | Native | API server, CLI, TUI, clustering |
+| Go → Go | Native | API server, CLI, TUI, clustering, config loading |
 
 **Build chain:**
 ```
@@ -66,6 +66,10 @@ make build
 ```
 
 The `swag` target regenerates `internal/api/docs/` (OpenAPI 2.0 spec embedded into the binary) and is served at runtime by `http-swagger` middleware mounted at `GET /swagger/`. The `proto` target regenerates `internal/gen/neko/v1/*.pb.go` from `proto/neko.proto`; generated files are gitignored and the directory is tracked via `.gitkeep`.
+
+## Configuration Layer
+
+`neko serve` loads `<resolved-data-dir>/config.toml` at startup via the new `internal/config` Go package (`Config` struct with TOML tags, `Default()`, `Load(path)`, `Validate()`, `Resolve(c, dto)`). Precedence applied per field is **CLI flag > `NEKO_HOME` env > config file > built-in defaults**. A missing or unreadable config file is not an error — `Load()` returns `Default()` for any ENOENT and the server proceeds with built-in defaults. TOML parsing uses `github.com/BurntSushi/toml`. The package is pure Go (no cgo, no Rust) and ships with 20 unit tests covering `Default`/`Load`/`Validate`/`Resolve` against the precedence matrix.
 
 ## Transport Multiplexing (REST + gRPC on the same port)
 

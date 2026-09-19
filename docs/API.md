@@ -485,7 +485,7 @@ Request and response messages mirror the `*HttpDTO` shapes in `internal/api/hand
 ## Notes
 
 - Vectors are auto-normalized on insert when the collection metric is `cosine`.
-- The default data directory is `~/.neko/`. Override with `NEKO_HOME` env var or `--data-dir`.
+- The default data directory is `~/.neko/`. Override with `NEKO_HOME` env var or `--data-dir` (a global persistent flag, accepted by every CLI command, since PR #48).
 - CORS headers are included on all responses (supports browser-based clients).
 - Search results are sorted by score descending for cosine/dot, ascending for L2.
 - Collections are bound to a model at creation time. Text search uses the collection's model. (Planned for Phase 2 — the `model` field on collection create is accepted today but not yet enforced.)

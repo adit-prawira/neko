@@ -56,7 +56,7 @@ Neko is a **local-first vector database** that developers install on their machi
 - [x] Maximum dimension limit (default 4096, configurable)
 - [x] Config file support (`config.toml`: port, data_dir, log_level, wal_rotate_mb, max_segments, max_dim) — loaded automatically from `<data-dir>/config.toml`; precedence is CLI flag > `NEKO_HOME` env > config file > built-in defaults; missing file falls back to defaults with no error (PR #46, issue #42).
 - [ ] Go CLI (`serve`, `create`, `insert`, `search`, `delete`, `stats`, `bench`, `version`) — current state: version, create, list, drop, insert, get, search, delete, upsert, serve, and stats are wired; `bench` is not yet implemented.
-- [x] Configurable data directory (`NEKO_HOME` env var or `--data-dir` flag)
+- [x] Configurable data directory (`NEKO_HOME` env var or `--data-dir` flag, promoted to a global persistent cobra flag since PR #48)
 - [x] Auto-normalization of vectors on insert (configurable)
 - [ ] Graceful shutdown (SIGTERM → flush WAL → close mmaps)
 - [ ] Single static binary build

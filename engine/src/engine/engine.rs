@@ -180,13 +180,37 @@ impl Engine {
 
     pub fn get_stats(&self, name: &str) -> Result<NekoStats> {
         let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        let vector_count = clowder.vectors.lock().map(|vector| vector.len() as u64).unwrap_or(0);
+        let collection_directory = self.data_directory.join("collections").join(name);
+        let storage_bytes = Engine::compute_directory_size(&collection_directory);
         Ok(NekoStats {
-            vector_count: 0,
+            vector_count,
             dim: clowder.dim,
             metric: clowder.metric,
-            storage_bytes: 0,
+            storage_bytes,
             index_type: 0,
         })
+    }
+
+    fn compute_directory_size(path: &Path) -> u64 {
+        let mut total = 0_u64;
+        let entries = match fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(_) => return 0,
+        };
+        for entry in entries.flatten() {
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+
+            if metadata.is_dir() {
+                total += Engine::compute_directory_size(&entry.path());
+            } else if metadata.is_file() {
+                total += metadata.len();
+            }
+        }
+        total
     }
 
     pub fn insert_vector(&mut self, name: &str, id: &str, vector: Vec<f32>, metadata: &VectorMetadata) -> Result<()> {
@@ -612,8 +636,37 @@ mod tests {
         assert_eq!(stats.dim, 768);
         assert_eq!(stats.metric, 2);
         assert_eq!(stats.vector_count, 0);
-        assert_eq!(stats.storage_bytes, 0);
+        assert!(stats.storage_bytes > 0, "manifest.json must contribute bytes after create");
         assert_eq!(stats.index_type, 0);
+    }
+
+    #[test]
+    fn given_insert_then_vector_count_matches() {
+        let dir = temp_dir("engine_stats_vector_count");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 1,
+                model: None,
+            })
+            .unwrap();
+
+        let metadata = VectorMetadata {
+            id: String::new(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        for index in 0..3_usize {
+            let identifier = format!("doc{index}");
+            engine.insert_vector("docs", &identifier, vec![0.1_f32; 3], &metadata).unwrap();
+        }
+
+        let stats = engine.get_stats("docs").unwrap();
+        assert_eq!(stats.vector_count, 3);
     }
 
     #[test]

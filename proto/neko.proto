@@ -58,10 +58,15 @@ message CreateCollectionResponse {
 }
 
 service CollectionService {
+  // Create creates a new collection with the given name, dimension, and distance metric.
   rpc Create(CreateCollectionRequest) returns (CreateCollectionResponse);
+  // List returns metadata for every collection.
   rpc List(google.protobuf.Empty) returns (CollectionsResponse);
+  // Get returns metadata for a single collection by name.
   rpc Get(GetCollectionRequest) returns (CollectionResponse);
+  // Drop removes a collection and its on-disk data.
   rpc Drop(DropCollectionRequest) returns (google.protobuf.Empty);
+  // Search runs top-K nearest-neighbor search against a collection's vectors.
   rpc Search(SearchRequest) returns (SearchResponse);
 };
 
@@ -115,9 +120,14 @@ message DeleteVectorRequest {
 }
 
 service VectorService {
+  // Insert stores a single vector; returns AlreadyExists if the id is taken.
   rpc Insert(InsertVectorRequest) returns (UpsertVectorResponse);
+  // InsertMany batch-inserts vectors (cap 10,000 per REST handler).
   rpc InsertMany(InsertManyVectorRequest) returns (InsertManyVectorResponse);
+  // Get returns the vector + metadata for a single id.
   rpc Get(GetVectorRequest) returns (GetVectorResponse);
+  // Upsert inserts a vector or replaces it if the id already exists.
   rpc Upsert(UpsertVectorRequest) returns (UpsertVectorResponse);
+  // Delete removes a vector by id.
   rpc Delete(DeleteVectorRequest) returns (google.protobuf.Empty);
 }

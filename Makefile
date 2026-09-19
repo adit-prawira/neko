@@ -12,8 +12,10 @@ build: swag proto
 swag:
 	swag init -g internal/api/handler.go -o internal/api/docs --parseDependency --parseInternal
 
-# Regenerate Go gRPC stubs from proto/neko.proto into internal/gen/.
-# Requires `protoc` on PATH and `protoc-gen-go` + `protoc-gen-go-grpc` in $GOBIN.
+# Regenerate Go gRPC stubs (internal/gen/) and HTML reference docs
+# (internal/grpc/docs/) from proto/neko.proto.
+# Requires `protoc` on PATH and `protoc-gen-go`, `protoc-gen-go-grpc`,
+# and `protoc-gen-doc` in $GOBIN.
 proto:
 	./proto/gen.sh
 

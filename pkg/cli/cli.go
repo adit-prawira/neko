@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	createDim    uint32
-	createMetric string
-	createModel  string
+	createDim     uint32
+	createMetric  string
+	createModel   string
+	dataDirectory string
 )
 
 func NewRootCommand() *cobra.Command {
@@ -27,8 +28,15 @@ func NewRootCommand() *cobra.Command {
 		Short:         "neko - a local-first vector database that purrs on your machine",
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Use == "version" {
+				return nil
+			}
+			return ensureEngine()
+		},
 	}
 
+	rootCmd.PersistentFlags().StringVar(&dataDirectory, "data-dir", "", "Data directory (overrides NEKO_HOME)")
 	rootCmd.AddCommand(
 		newVersionCmd(),
 		newCreateCmd(),
@@ -62,9 +70,6 @@ func newCreateCmd() *cobra.Command {
 		Short: "Create a new collection",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
 			name := args[0]
 			metricCode, err := ffi.ParseMetric(createMetric)
 			if err != nil {
@@ -96,10 +101,6 @@ func newSearchCmd() *cobra.Command {
 		Short: "Search top-K nearest neighbors",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
-
 			name := args[0]
 			data, err := os.ReadFile(searchFile)
 			if err != nil {
@@ -131,9 +132,6 @@ func newListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all collections",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
 			names, err := ffi.List()
 			if err != nil {
 				return err
@@ -157,9 +155,6 @@ func newDropCmd() *cobra.Command {
 		Short: "Remove a collection",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
 			if err := ffi.Drop(args[0]); err != nil {
 				return err
 			}
@@ -180,9 +175,6 @@ func newInsertCmd() *cobra.Command {
 		Short: "Insert a vector into a collection",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
 			name := args[0]
 			data, err := os.ReadFile(insertFile)
 			if err != nil {
@@ -220,10 +212,6 @@ func newUpsertCmd() *cobra.Command {
 		Short: "Insert or update a vector by ID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
-
 			name := args[0]
 			data, err := os.ReadFile(upsertFile)
 			if err != nil {
@@ -257,10 +245,6 @@ func newGetCmd() *cobra.Command {
 		Short: "Retrieve a vector by ID",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
-
 			name := args[0]
 			id := args[1]
 
@@ -292,10 +276,6 @@ func newDeleteCmd() *cobra.Command {
 		Short: "Delete a vector by ID",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
-
 			name := args[0]
 			id := args[1]
 			if err := ffi.Delete(name, id); err != nil {
@@ -310,7 +290,6 @@ func newDeleteCmd() *cobra.Command {
 
 func newServeCmd() *cobra.Command {
 	var port int
-	var dataDirectory string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -318,11 +297,11 @@ func newServeCmd() *cobra.Command {
 		Long:  "Start the neko REST server on the configured port with graceful shutdown.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			portFlag := cmd.Flags().Lookup("port")
-			dataDirectoryFlag := cmd.Flags().Lookup("data-dir")
 			isPortChanged := portFlag != nil && portFlag.Changed
-			isDataDirectoryChanged := dataDirectoryFlag != nil && dataDirectoryFlag.Changed
 
-			configPath := filepath.Join(dataDirectory, "config.toml")
+			resolvedDirectory := resolveDataDirectory()
+			isDataDirectoryChanged := dataDirectory != ""
+			configPath := filepath.Join(resolvedDirectory, "config.toml")
 			loadedConfig, err := config.Load(configPath)
 			if err != nil {
 				return err
@@ -333,7 +312,7 @@ func newServeCmd() *cobra.Command {
 					IsChanged: isPortChanged,
 				},
 				DataDirectory: config.Property[string]{
-					Value:     dataDirectory,
+					Value:     resolvedDirectory,
 					IsChanged: isDataDirectoryChanged,
 				},
 				EnvDataDirectory: os.Getenv("NEKO_HOME"),
@@ -355,7 +334,6 @@ func newServeCmd() *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&port, "port", 3434, "HTTP Port")
-	cmd.Flags().StringVar(&dataDirectory, "data-dir", ffi.DefaultDataDirectory(), "Data Directory")
 	return cmd
 }
 
@@ -374,11 +352,7 @@ func newStatsCmd() *cobra.Command {
 		Use:   "stats",
 		Short: "Show per-collection vector count, disk usage, segment count",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureEngine(); err != nil {
-				return err
-			}
-
-			dataDirectory := ffi.DefaultDataDirectory()
+			resolvedDirectory := resolveDataDirectory()
 			names, err := ffi.List()
 
 			if err != nil {
@@ -399,7 +373,7 @@ func newStatsCmd() *cobra.Command {
 					Metric:       ffi.MetricNames[stat.Metric],
 					VectorCount:  stat.VectorCount,
 					StorageBytes: stat.StorageBytes,
-					Segments:     countSegments(dataDirectory, name),
+					Segments:     countSegments(resolvedDirectory, name),
 				})
 			}
 			return renderStats(cmd.OutOrStdout(), rows, jsonOut)
@@ -457,5 +431,13 @@ func formatBytes(n uint64) string {
 }
 
 func ensureEngine() error {
-	return ffi.Init(ffi.DefaultDataDirectory())
+	return ffi.Init(resolveDataDirectory())
+}
+
+func resolveDataDirectory() string {
+	if dataDirectory != "" {
+		return dataDirectory
+	}
+
+	return ffi.DefaultDataDirectory()
 }

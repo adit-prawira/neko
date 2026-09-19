@@ -429,7 +429,19 @@ func TestServeCommandPortDefault(t *testing.T) {
 	}
 }
 
-func TestServeCommandDataDirFlag(t *testing.T) {
+func TestRootCommandDataDirFlag(t *testing.T) {
+	root := NewRootCommand()
+
+	dataDirFlag := root.PersistentFlags().Lookup("data-dir")
+	if dataDirFlag == nil {
+		t.Fatal("expected 'data-dir' flag on root persistent flags")
+	}
+	if dataDirFlag.DefValue != "" {
+		t.Errorf("expected data-dir default to be empty, got %q", dataDirFlag.DefValue)
+	}
+}
+
+func TestServeCommandInheritsDataDirFlag(t *testing.T) {
 	root := NewRootCommand()
 
 	serveCommand, _, err := root.Find([]string{"serve"})
@@ -437,12 +449,32 @@ func TestServeCommandDataDirFlag(t *testing.T) {
 		t.Fatalf("expected serve command to exist: %v", err)
 	}
 
-	dataDirFlag := serveCommand.Flags().Lookup("data-dir")
+	dataDirFlag := serveCommand.InheritedFlags().Lookup("data-dir")
 	if dataDirFlag == nil {
-		t.Fatal("expected 'data-dir' flag on serve command")
+		t.Fatal("expected 'data-dir' flag to be inherited from root on serve command")
 	}
-	if dataDirFlag.DefValue == "" {
-		t.Error("expected non-empty default for 'data-dir' flag")
+}
+
+func TestVersionCommandSkipsEngineInit(t *testing.T) {
+	resetDataDirectory(t)
+
+	// Point NEKO_HOME at a path under /dev/null where create_dir_all will
+	// fail. If PersistentPreRunE does not skip version, ensureEngine would
+	// call ffi.Init against this path and version's Execute would return
+	// an error — which is what the assertion below catches.
+	os.Setenv("NEKO_HOME", "/dev/null/neko_test_version_skip")
+	t.Cleanup(func() { os.Unsetenv("NEKO_HOME") })
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetArgs([]string{"version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("version command should skip engine init, got error: %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "neko v0.1.0") {
+		t.Errorf("expected version output to contain 'neko v0.1.0', got %q", buf.String())
 	}
 }
 
@@ -531,6 +563,11 @@ func resetEngineState(t *testing.T) {
 			t.Fatalf("ffi.Drop(%q): %v", name, err)
 		}
 	}
+}
+
+func resetDataDirectory(t *testing.T) {
+	t.Helper()
+	dataDirectory = ""
 }
 
 func TestStatsCommandWithCollections(t *testing.T) {

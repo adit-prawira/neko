@@ -720,3 +720,179 @@ func mapKeys(input map[string]any) []string {
 	}
 	return keys
 }
+
+func TestRandomVector(t *testing.T) {
+	cases := []struct {
+		name string
+		dim  uint32
+	}{
+		{"single_dim", 1},
+		{"small_dim", 8},
+		{"medium_dim", 384},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			vector := randomVector(testCase.dim)
+
+			if uint32(len(vector)) != testCase.dim {
+				t.Errorf("expected length %d, got %d", testCase.dim, len(vector))
+			}
+			for index, value := range vector {
+				if value < -1.0 || value >= 1.0 {
+					t.Errorf("value out of [-1, 1) at index %d: %f", index, value)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderBenchJSON(t *testing.T) {
+	result := BenchResult{
+		Metric:          "cosine",
+		Dim:             384,
+		Vectors:         1000,
+		K:               10,
+		Queries:         500,
+		InsertSeconds:   1.5,
+		InsertPerSecond: 666.66,
+		SearchQPS:       333.33,
+		SearchP50Millis: 8.2,
+		SearchP95Millis: 12.1,
+		SearchP99Millis: 18.7,
+	}
+
+	var output bytes.Buffer
+	if err := renderBench(&output, result, true); err != nil {
+		t.Fatalf("renderBench json: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(output.Bytes(), &parsed); err != nil {
+		t.Fatalf("output not valid JSON: %v\noutput: %s", err, output.String())
+	}
+
+	expectedFields := []string{
+		"metric", "dim", "vectors", "k", "queries",
+		"insert_seconds", "insert_per_second", "search_qps",
+		"search_p50_millis", "search_p95_millis", "search_p99_millis",
+	}
+	for _, field := range expectedFields {
+		if _, ok := parsed[field]; !ok {
+			t.Errorf("expected field %q in JSON output, got keys: %v", field, mapKeys(parsed))
+		}
+	}
+	if metricValue, ok := parsed["metric"].(string); !ok || metricValue != "cosine" {
+		t.Errorf("expected metric=cosine, got: %v", parsed["metric"])
+	}
+	if dimValue, ok := parsed["dim"].(float64); !ok || dimValue != 384 {
+		t.Errorf("expected dim=384, got: %v", parsed["dim"])
+	}
+	if p50Value, ok := parsed["search_p50_millis"].(float64); !ok || p50Value != 8.2 {
+		t.Errorf("expected search_p50_millis=8.2, got: %v", parsed["search_p50_millis"])
+	}
+}
+
+func TestRenderBenchText(t *testing.T) {
+	result := BenchResult{
+		Metric:          "l2",
+		Dim:             128,
+		Vectors:         5000,
+		K:               5,
+		Queries:         100,
+		InsertSeconds:   0.5,
+		InsertPerSecond: 10000,
+		SearchQPS:       2000,
+		SearchP50Millis: 1.5,
+		SearchP95Millis: 3.2,
+		SearchP99Millis: 5.8,
+	}
+
+	var output bytes.Buffer
+	if err := renderBench(&output, result, false); err != nil {
+		t.Fatalf("renderBench text: %v", err)
+	}
+
+	rendered := output.String()
+	expectedSubstrings := []string{
+		"Metric:", "Vectors:", "Insert:", "Search:",
+		"p50:", "p95:", "p99:",
+		"l2", "128", "5000",
+	}
+	for _, expected := range expectedSubstrings {
+		if !strings.Contains(rendered, expected) {
+			t.Errorf("expected %q in text output, got:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestBenchCommandFlagDefaults(t *testing.T) {
+	root := NewRootCommand()
+
+	benchCommand, _, err := root.Find([]string{"bench"})
+	if err != nil {
+		t.Fatalf("expected bench command to exist: %v", err)
+	}
+
+	flagCases := []struct {
+		flag      string
+		wantValue string
+		flagType  string
+	}{
+		{"vectors", "100000", "uint32"},
+		{"dim", "384", "uint32"},
+		{"k", "10", "uint32"},
+		{"queries", "1000", "uint32"},
+		{"metric", "cosine", "string"},
+		{"json", "false", "bool"},
+	}
+	for _, testCase := range flagCases {
+		flag := benchCommand.Flags().Lookup(testCase.flag)
+		if flag == nil {
+			t.Errorf("expected flag %q on bench command", testCase.flag)
+			continue
+		}
+		if flag.DefValue != testCase.wantValue {
+			t.Errorf("flag %q default = %q, want %q", testCase.flag, flag.DefValue, testCase.wantValue)
+		}
+		if flag.Value.Type() != testCase.flagType {
+			t.Errorf("flag %q type = %q, want %q", testCase.flag, flag.Value.Type(), testCase.flagType)
+		}
+	}
+}
+
+func TestBenchCommandRunsEndToEnd(t *testing.T) {
+	dir := cliSetup(t)
+	defer os.RemoveAll(dir)
+	resetEngineState(t)
+
+	cmd := NewRootCommand()
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+
+	cmd.SetArgs([]string{"bench", "--vectors", "10", "--queries", "5", "--k", "2", "--dim", "4"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("bench command failed: %v", err)
+	}
+
+	rendered := output.String()
+	expectedSubstrings := []string{
+		"Metric:", "Vectors:", "Insert:", "Search:",
+		"p50:", "p95:", "p99:",
+		"10", "4", "2", "5",
+	}
+	for _, expected := range expectedSubstrings {
+		if !strings.Contains(rendered, expected) {
+			t.Errorf("expected %q in bench output, got:\n%s", expected, rendered)
+		}
+	}
+
+	names, err := ffi.List()
+	if err != nil {
+		t.Fatalf("ffi.List: %v", err)
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, "bench_") {
+			t.Errorf("temp bench collection not cleaned up: %q", name)
+		}
+	}
+}

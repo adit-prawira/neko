@@ -49,6 +49,7 @@ func NewRootCommand() *cobra.Command {
 		newUpsertCmd(),
 		newServeCmd(),
 		newStatsCmd(),
+		NewBenchCmd(),
 	)
 	return rootCmd
 }

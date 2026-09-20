@@ -26,6 +26,9 @@ neko create docs --dim 384
 neko insert docs --id doc1 --file query.f32
 neko search docs --file query.f32 --k 10
 
+# Benchmark insert + search throughput
+neko bench --vectors 100000 --dim 384 --k 10
+
 # Or use the REST API
 curl -X POST localhost:3434/v1/collections/docs/search \
   -H 'Content-Type: application/json' \

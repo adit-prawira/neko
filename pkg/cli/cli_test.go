@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adit-prawira/neko/internal/config"
 	"github.com/adit-prawira/neko/internal/ffi"
 )
 
@@ -894,5 +895,159 @@ func TestBenchCommandRunsEndToEnd(t *testing.T) {
 		if strings.HasPrefix(name, "bench_") {
 			t.Errorf("temp bench collection not cleaned up: %q", name)
 		}
+	}
+}
+
+func TestConfigCommandRegistered(t *testing.T) {
+	root := NewRootCommand()
+
+	found := false
+	for _, subcommand := range root.Commands() {
+		if subcommand.Use == "config" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'config' subcommand to be registered")
+	}
+}
+
+func TestConfigInitCommandRegistered(t *testing.T) {
+	root := NewRootCommand()
+
+	_, _, err := root.Find([]string{"config", "init"})
+	if err != nil {
+		t.Errorf("expected 'config init' subcommand to be registered: %v", err)
+	}
+}
+
+func TestConfigInitForceFlag(t *testing.T) {
+	root := NewRootCommand()
+
+	configCommand, _, err := root.Find([]string{"config", "init"})
+	if err != nil {
+		t.Fatalf("expected 'config init' subcommand to exist: %v", err)
+	}
+
+	forceFlag := configCommand.Flags().Lookup("force")
+	if forceFlag == nil {
+		t.Fatal("expected 'force' flag on 'config init' command")
+	}
+	if forceFlag.Value.Type() != "bool" {
+		t.Errorf("expected force flag to be bool, got %q", forceFlag.Value.Type())
+	}
+	if forceFlag.DefValue != "false" {
+		t.Errorf("expected force flag default false, got %q", forceFlag.DefValue)
+	}
+}
+
+func TestConfigInitWritesTemplate(t *testing.T) {
+	resetDataDirectory(t)
+	dir := t.TempDir()
+	os.Setenv("NEKO_HOME", dir)
+	t.Cleanup(func() { os.Unsetenv("NEKO_HOME") })
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"config", "init"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("config init failed: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.toml")
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("config.toml not written at %s: %v", configPath, err)
+	}
+	want := []byte(config.DefaultTemplate())
+	if !bytes.Equal(got, want) {
+		t.Errorf("config.toml contents do not match template;\nwant:\n%s\ngot:\n%s", string(want), string(got))
+	}
+}
+
+func TestConfigInitRefusesOverwriteWithoutForce(t *testing.T) {
+	resetDataDirectory(t)
+	dir := t.TempDir()
+	os.Setenv("NEKO_HOME", dir)
+	t.Cleanup(func() { os.Unsetenv("NEKO_HOME") })
+
+	configPath := filepath.Join(dir, "config.toml")
+	originalContents := []byte("# user config — must survive refusal\nport = 9999\n")
+	if err := os.WriteFile(configPath, originalContents, 0644); err != nil {
+		t.Fatalf("WriteFile setup failed: %v", err)
+	}
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"config", "init"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("config init returned nil error; want refusal error")
+	} else if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("config init error %q does not mention 'already exists'", err.Error())
+	}
+
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if !bytes.Equal(got, originalContents) {
+		t.Errorf("config.toml was modified despite refusal;\nwant:\n%s\ngot:\n%s", originalContents, got)
+	}
+
+	forceCmd := NewRootCommand()
+	forceCmd.SetArgs([]string{"config", "init", "--force"})
+	if err := forceCmd.Execute(); err != nil {
+		t.Fatalf("config init --force failed: %v", err)
+	}
+
+	got, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile after --force failed: %v", err)
+	}
+	if !bytes.Equal(got, []byte(config.DefaultTemplate())) {
+		t.Errorf("--force did not overwrite with template;\nwant:\n%s\ngot:\n%s", config.DefaultTemplate(), string(got))
+	}
+}
+
+func TestConfigInitCreatesParentDirectory(t *testing.T) {
+	resetDataDirectory(t)
+	parent := t.TempDir()
+	nestedDataDir := filepath.Join(parent, "freshly", "made", "neko_home")
+	os.Setenv("NEKO_HOME", nestedDataDir)
+	t.Cleanup(func() { os.Unsetenv("NEKO_HOME") })
+
+	if _, err := os.Stat(nestedDataDir); !os.IsNotExist(err) {
+		t.Fatalf("precondition failed: %s should not exist; stat err = %v", nestedDataDir, err)
+	}
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"config", "init"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("config init failed: %v", err)
+	}
+
+	configPath := filepath.Join(nestedDataDir, "config.toml")
+	if _, err := os.Stat(configPath); err != nil {
+		t.Errorf("config.toml not created at %s: %v", configPath, err)
+	}
+}
+
+func TestConfigInitSkipsEngineInit(t *testing.T) {
+	resetDataDirectory(t)
+
+	os.Setenv("NEKO_HOME", "/dev/null/neko_test_config_skip")
+	t.Cleanup(func() { os.Unsetenv("NEKO_HOME") })
+
+	root := NewRootCommand()
+	initCmd, _, err := root.Find([]string{"config", "init"})
+	if err != nil {
+		t.Fatalf("config init not found: %v", err)
+	}
+
+	if root.PersistentPreRunE == nil {
+		t.Fatal("root command has no PersistentPreRunE")
+	}
+
+	if err := root.PersistentPreRunE(initCmd, nil); err != nil {
+		t.Errorf("PersistentPreRunE(config init) should skip engine init, got error: %v", err)
 	}
 }

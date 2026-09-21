@@ -5,8 +5,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var dataDirectory string
-
 func NewRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:           "neko",
@@ -17,6 +15,11 @@ func NewRootCommand() *cobra.Command {
 			if cmd.Use == "version" {
 				return nil
 			}
+
+			if cmd.HasParent() && cmd.Parent().Use == "config" {
+				return nil
+			}
+
 			return ensureEngine()
 		},
 	}
@@ -35,18 +38,11 @@ func NewRootCommand() *cobra.Command {
 		NewServeCmd(),
 		NewStatsCmd(),
 		NewBenchCmd(),
+		NewConfigCmd(),
 	)
 	return rootCmd
 }
 
 func ensureEngine() error {
 	return ffi.Init(resolveDataDirectory())
-}
-
-func resolveDataDirectory() string {
-	if dataDirectory != "" {
-		return dataDirectory
-	}
-
-	return ffi.DefaultDataDirectory()
 }

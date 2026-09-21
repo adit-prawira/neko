@@ -2,7 +2,6 @@ package cli
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/adit-prawira/neko/internal/config"
 	"github.com/adit-prawira/neko/internal/ffi"
@@ -23,7 +22,7 @@ func NewServeCmd() *cobra.Command {
 
 			resolvedDirectory := resolveDataDirectory()
 			isDataDirectoryChanged := dataDirectory != ""
-			configPath := filepath.Join(resolvedDirectory, "config.toml")
+			configPath := resolveConfigPath()
 			loadedConfig, err := config.Load(configPath)
 			if err != nil {
 				return err

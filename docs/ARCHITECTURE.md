@@ -69,7 +69,7 @@ The `swag` target regenerates `internal/api/docs/` (OpenAPI 2.0 spec embedded in
 
 ## Configuration Layer
 
-`neko serve` loads `<resolved-data-dir>/config.toml` at startup via the new `internal/config` Go package (`Config` struct with TOML tags, `Default()`, `Load(path)`, `Validate()`, `Resolve(c, dto)`). Precedence applied per field is **CLI flag > `NEKO_HOME` env > config file > built-in defaults**. A missing or unreadable config file is not an error — `Load()` returns `Default()` for any ENOENT and the server proceeds with built-in defaults. TOML parsing uses `github.com/BurntSushi/toml`. The package is pure Go (no cgo, no Rust) and ships with 20 unit tests covering `Default`/`Load`/`Validate`/`Resolve` against the precedence matrix.
+`neko serve` loads `<resolved-data-dir>/config.toml` at startup via the `internal/config` Go package (`Config` struct with TOML tags, `Default()`, `Load(path)`, `Validate()`, `Resolve(c, dto)`). Precedence applied per field is **CLI flag > `NEKO_HOME` env > config file > built-in defaults**. A missing or unreadable config file is not an error — `Load()` returns `Default()` for any ENOENT and the server proceeds with built-in defaults. TOML parsing uses `github.com/BurntSushi/toml`. The package is pure Go (no cgo, no Rust) and ships with 25 unit tests covering `Default`/`Load`/`Validate`/`Resolve` (20 tests) plus `WriteDefault`/`DefaultTemplate` (5 tests, added PR #59 for the `neko config init` writer).
 
 ## Transport Multiplexing (REST + gRPC on the same port)
 

@@ -18,6 +18,9 @@ Every AI app needs to search vectors. Existing options either lock you into a cl
 ```bash
 brew install neko
 
+# Scaffold your config (optional — first run uses built-in defaults)
+neko config init
+
 # Start the server
 neko serve
 

@@ -47,7 +47,7 @@ func NewBenchCmd() *cobra.Command {
 			}
 
 			collectionName := fmt.Sprintf("bench_%d", time.Now().UnixNano())
-			if err := ffi.Create(collectionName, benchDim, metricCode, ""); err != nil {
+			if err := ffi.Create(collectionName, benchDim, metricCode, "", ffi.IndexTypeBrute); err != nil {
 				return err
 			}
 

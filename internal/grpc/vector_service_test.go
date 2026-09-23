@@ -17,7 +17,7 @@ func TestVectorServiceInsert(t *testing.T) {
 		name := "grpc_test_insert_basic"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -47,7 +47,7 @@ func TestVectorServiceInsert(t *testing.T) {
 		name := "grpc_test_insert_empty_id"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -96,7 +96,7 @@ func TestVectorServiceInsertMany(t *testing.T) {
 		name := "grpc_test_insert_many_basic"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -143,7 +143,7 @@ func TestVectorServiceInsertMany(t *testing.T) {
 		name := "grpc_test_insert_many_dim"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -171,7 +171,7 @@ func TestVectorServiceGet(t *testing.T) {
 		name := "grpc_test_get_vector_basic"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
@@ -198,7 +198,7 @@ func TestVectorServiceGet(t *testing.T) {
 		name := "grpc_test_get_vector_missing_id"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -221,7 +221,7 @@ func TestVectorServiceUpsert(t *testing.T) {
 		name := "grpc_test_upsert_new"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -251,7 +251,7 @@ func TestVectorServiceUpsert(t *testing.T) {
 		name := "grpc_test_upsert_replace"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 0.0, 0.0}, ""); err != nil {
@@ -288,7 +288,7 @@ func TestVectorServiceDelete(t *testing.T) {
 		name := "grpc_test_delete_basic"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
@@ -314,7 +314,7 @@ func TestVectorServiceDelete(t *testing.T) {
 		name := "grpc_test_delete_missing_id"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 

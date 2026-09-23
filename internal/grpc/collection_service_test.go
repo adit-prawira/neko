@@ -96,7 +96,7 @@ func TestCollectionServiceCreate(t *testing.T) {
 		name := "grpc_test_create_dup"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricCosine, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricCosine, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -123,7 +123,7 @@ func TestCollectionServiceList(t *testing.T) {
 		name := "grpc_test_list_basic"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -158,7 +158,7 @@ func TestCollectionServiceGet(t *testing.T) {
 		name := "grpc_test_get_basic"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 4, ffi.MetricDot, ""); err != nil {
+		if err := ffi.Create(name, 4, ffi.MetricDot, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -200,7 +200,7 @@ func TestCollectionServiceDrop(t *testing.T) {
 		grpcTestSetup(t)
 		name := "grpc_test_drop_basic"
 
-		if err := ffi.Create(name, 3, ffi.MetricCosine, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricCosine, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 
@@ -239,7 +239,7 @@ func TestCollectionServiceSearch(t *testing.T) {
 		name := "grpc_test_search_empty"
 		defer func() { _ = ffi.Drop(name) }()
 
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("setup create failed: %v", err)
 		}
 

@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use crate::index::factory::{INDEX_TYPE_BRUTE, INDEX_TYPE_HNSW, IndexFactory};
+use crate::index::resource::InputVector;
 use crate::manifest::manager::ManifestManager;
 use crate::manifest::resource::Manifest;
 use crate::segment::resource::VectorMetadata;
@@ -12,7 +14,7 @@ use crate::wal::replayer::WalReplayer;
 use crate::wal::resource::WalEntry;
 use crate::wal::writer::WalWriter;
 
-use super::knn::{KNN, KNNSearchParams, ScoredVector};
+use super::knn::ScoredVector;
 use super::resource::Clowder;
 use super::validator::EngineValidator;
 
@@ -29,6 +31,7 @@ pub struct CreateClowderDto<'a> {
     pub dim: u32,
     pub metric: u8,
     pub model: Option<&'a str>,
+    pub index_type: u8,
 }
 
 pub struct InputVectorDto {
@@ -77,6 +80,10 @@ impl Engine {
                 continue;
             };
 
+            let Ok(index) = IndexFactory::build(manifest.index_type, Some(manifest.dim), Some(manifest.metric)) else {
+                continue;
+            };
+
             clowders.insert(
                 name.clone(),
                 Arc::new(Clowder {
@@ -84,6 +91,8 @@ impl Engine {
                     dim: manifest.dim,
                     metric: manifest.metric,
                     model: manifest.model,
+                    index_type: manifest.index_type,
+                    index,
                     vectors: Mutex::new(HashMap::new()),
                     metadata: Mutex::new(HashMap::new()),
                 }),
@@ -107,6 +116,24 @@ impl Engine {
                 }
             }
         }
+
+        for clowder in clowders.values() {
+            if clowder.index_type != INDEX_TYPE_HNSW {
+                continue;
+            }
+            let snapshot: Vec<InputVector> = {
+                let vectors = clowder.vectors.lock().unwrap();
+                vectors
+                    .iter()
+                    .map(|(id, vector)| InputVector {
+                        id: id.to_string(),
+                        vector: vector.clone(),
+                    })
+                    .collect()
+            };
+            clowder.index.insert_batch(&snapshot)?;
+        }
+
         let wal = WalWriter::open(&collection_directory, 64)
             .inspect_err(|err| eprintln!("WAL: failed to open write-ahead log ({}); insert will not be persisted", err))
             .ok();
@@ -124,6 +151,7 @@ impl Engine {
         EngineValidator::collection_name(payload.name)?;
         EngineValidator::dim(payload.dim)?;
         EngineValidator::metric(payload.metric)?;
+        EngineValidator::index_type(payload.index_type)?;
 
         if self.clowders.contains_key(payload.name) {
             return Err(Hairball::AlreadyExists);
@@ -139,10 +167,12 @@ impl Engine {
             metric: payload.metric,
             model: payload.model.map(|model| model.to_string()),
             segments: Vec::new(),
+            index_type: payload.index_type,
         };
         let manifest_path = collection_directory.join("manifest.json");
         ManifestManager::save_manifest(&manifest_path, &manifest)?;
 
+        let index = IndexFactory::build(payload.index_type, Some(payload.dim), Some(payload.metric))?;
         self.clowders.insert(
             payload.name.to_string(),
             Arc::new(Clowder {
@@ -150,6 +180,8 @@ impl Engine {
                 dim: payload.dim,
                 metric: payload.metric,
                 model: payload.model.map(|model| model.to_string()),
+                index_type: payload.index_type,
+                index,
                 vectors: Mutex::new(HashMap::new()),
                 metadata: Mutex::new(HashMap::new()),
             }),
@@ -188,7 +220,7 @@ impl Engine {
             dim: clowder.dim,
             metric: clowder.metric,
             storage_bytes,
-            index_type: 0,
+            index_type: clowder.index_type,
         })
     }
 
@@ -220,7 +252,7 @@ impl Engine {
         }
 
         let mut normalised_vector = vector;
-        if clowder.metric == 1 {
+        if clowder.metric == 1 && clowder.index_type == INDEX_TYPE_BRUTE {
             let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
             if normalised_squares > 1e-18 {
                 let inverse_normal = 1.0 / normalised_squares.sqrt();
@@ -234,13 +266,14 @@ impl Engine {
         if let Some(ref mut wal) = self.wal {
             wal.append_insert(&wal_id, &normalised_vector, metadata)?;
         }
-        clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector);
+        clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector.clone());
         let has_custom_metadata = !metadata.custom.is_empty();
         if has_custom_metadata {
             clowder.metadata.lock().unwrap().insert(id.to_string(), metadata.custom.clone());
         } else {
             clowder.metadata.lock().unwrap().remove(id);
         }
+        clowder.index.insert(id, &normalised_vector)?;
         Ok(())
     }
 
@@ -252,7 +285,7 @@ impl Engine {
             .into_iter()
             .map(|input_vector| {
                 let mut normalised_vector = input_vector.vector;
-                if clowder.metric == 1 {
+                if clowder.metric == 1 && clowder.index_type == INDEX_TYPE_BRUTE {
                     let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
                     if normalised_squares > 1e-18 {
                         let inverse_normal = 1.0 / normalised_squares.sqrt();
@@ -288,6 +321,16 @@ impl Engine {
                 Engine::resolve_metadata_store(&mut metadata_store, normalised_input_vector)?;
             }
         }
+
+        let items: Vec<InputVector> = normalised_input_vectors
+            .iter()
+            .map(|item| InputVector {
+                id: item.id.to_string(),
+                vector: item.vector.clone(),
+            })
+            .collect();
+
+        clowder.index.insert_batch(&items)?;
         Ok(())
     }
 
@@ -326,8 +369,14 @@ impl Engine {
         if vector.len() != clowder.dim as usize {
             return Err(Hairball::DimMismatch);
         }
+        if clowder.index_type == INDEX_TYPE_HNSW {
+            let exists = clowder.vectors.lock().unwrap().contains_key(id);
+            if exists {
+                return Err(Hairball::InternalError);
+            }
+        }
         let mut normalised_vector = vector;
-        if clowder.metric == 1 {
+        if clowder.metric == 1 && clowder.index_type == INDEX_TYPE_BRUTE {
             let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
             if normalised_squares > 1e-18 {
                 let inverse_normal = 1.0 / normalised_squares.sqrt();
@@ -342,13 +391,14 @@ impl Engine {
             wal.append_delete(&wal_id)?;
             wal.append_insert(&wal_id, &normalised_vector, metadata)?;
         }
-        clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector);
+        clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector.clone());
         let has_custom_metadata = !metadata.custom.is_empty();
         if has_custom_metadata {
             clowder.metadata.lock().unwrap().insert(id.to_string(), metadata.custom.clone());
         } else {
             clowder.metadata.lock().unwrap().remove(id);
         }
+        clowder.index.insert(id, &normalised_vector)?;
         Ok(())
     }
 
@@ -360,6 +410,9 @@ impl Engine {
 
     pub fn delete_vector(&mut self, name: &str, id: &str) -> Result<()> {
         let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        if clowder.index_type == INDEX_TYPE_HNSW {
+            return Err(Hairball::InternalError);
+        }
         let exist = clowder.vectors.lock().unwrap().contains_key(id);
 
         if !exist {
@@ -408,15 +461,7 @@ impl Engine {
             return Err(Hairball::DimMismatch);
         }
         let vectors = clowder.vectors.lock().unwrap();
-        KNN::search(
-            &vectors,
-            &KNNSearchParams {
-                query,
-                top_k,
-                metric: clowder.metric,
-                dim: clowder.dim,
-            },
-        )
+        clowder.index.search(&vectors, query, top_k, clowder.metric, clowder.dim)
     }
 }
 
@@ -458,6 +503,7 @@ mod tests {
                 dim: 384,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -484,6 +530,7 @@ mod tests {
                 dim: 128,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
         engine
@@ -492,6 +539,7 @@ mod tests {
                 dim: 256,
                 metric: 2,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -510,6 +558,7 @@ mod tests {
                 dim: 384,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
         let result = engine.create_clowder(CreateClowderDto {
@@ -517,6 +566,7 @@ mod tests {
             dim: 512,
             metric: 0,
             model: None,
+            index_type: 0,
         });
 
         assert_eq!(result.unwrap_err(), Hairball::AlreadyExists);
@@ -533,6 +583,7 @@ mod tests {
             dim: 128,
             metric: 0,
             model: None,
+            index_type: 0,
         });
         assert_eq!(result.unwrap_err(), Hairball::InvalidName);
 
@@ -541,6 +592,7 @@ mod tests {
             dim: 128,
             metric: 0,
             model: None,
+            index_type: 0,
         });
         assert_eq!(result.unwrap_err(), Hairball::InvalidName);
     }
@@ -555,6 +607,7 @@ mod tests {
             dim: 4097,
             metric: 0,
             model: None,
+            index_type: 0,
         });
         assert_eq!(result.unwrap_err(), Hairball::DimTooLarge);
         assert!(engine.clowders.is_empty());
@@ -570,6 +623,7 @@ mod tests {
             dim: 0,
             metric: 0,
             model: None,
+            index_type: 0,
         });
         assert_eq!(result.unwrap_err(), Hairball::DimTooSmall);
     }
@@ -584,6 +638,7 @@ mod tests {
             dim: 128,
             metric: 3,
             model: None,
+            index_type: 0,
         });
         assert_eq!(result.unwrap_err(), Hairball::InvalidMetric);
     }
@@ -599,6 +654,7 @@ mod tests {
                 dim: 384,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
         let coll_dir = dir.join("collections").join("docs");
@@ -629,6 +685,7 @@ mod tests {
                 dim: 768,
                 metric: 2,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -650,6 +707,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -689,6 +747,7 @@ mod tests {
                 dim: 384,
                 metric: 1,
                 model: Some("all-MiniLM-L6-v2"),
+                index_type: 0,
             })
             .unwrap();
 
@@ -711,6 +770,7 @@ mod tests {
                     dim: 384,
                     metric: 1,
                     model: None,
+                    index_type: 0,
                 })
                 .unwrap();
         }
@@ -735,6 +795,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -762,6 +823,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -803,6 +865,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -830,6 +893,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -856,6 +920,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -895,6 +960,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -921,6 +987,7 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -959,6 +1026,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -976,6 +1044,7 @@ mod tests {
                 dim: 1,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1003,6 +1072,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1030,6 +1100,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1056,6 +1127,7 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1085,6 +1157,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1113,6 +1186,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1159,6 +1233,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1195,6 +1270,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1223,6 +1299,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1258,6 +1335,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1301,6 +1379,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1338,6 +1417,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1381,6 +1461,7 @@ mod tests {
                 dim: 2,
                 metric: 1,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1403,6 +1484,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1428,6 +1510,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
+                index_type: 0,
             })
             .unwrap();
 
@@ -1466,5 +1549,112 @@ mod tests {
             deleted: false,
             custom: custom.to_string(),
         }
+    }
+
+    #[test]
+    fn given_hnsw_collection_then_delete_returns_internal_error() {
+        let dir = temp_dir("hnsw_delete_refuse");
+        let mut engine = new_engine(&dir);
+
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                index_type: INDEX_TYPE_HNSW,
+            })
+            .unwrap();
+
+        let meta = VectorMetadata {
+            id: String::new(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("pts", "x", vec![1.0, 0.0], &meta).unwrap();
+        let result = engine.delete_vector("pts", "x");
+        assert!(matches!(result, Err(Hairball::InternalError)));
+    }
+
+    #[test]
+    fn given_hnsw_collection_then_upsert_on_existing_id_returns_internal_error() {
+        let dir = temp_dir("hnsw_upsert_refuse");
+        let mut engine = new_engine(&dir);
+
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                index_type: INDEX_TYPE_HNSW,
+            })
+            .unwrap();
+
+        let meta = VectorMetadata {
+            id: String::new(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("pts", "x", vec![1.0, 0.0], &meta).unwrap();
+        let result = engine.upsert_vector("pts", "x", vec![2.0, 0.0], &meta);
+        assert!(matches!(result, Err(Hairball::InternalError)));
+    }
+
+    #[test]
+    fn given_brute_collection_then_index_flag_accepted_without_changing_search_behavior() {
+        let dir = temp_dir("brute_index_flag");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                index_type: INDEX_TYPE_BRUTE,
+            })
+            .unwrap();
+        let meta = VectorMetadata {
+            id: String::new(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("pts", "near", vec![1.0, 0.0], &meta).unwrap();
+        engine.insert_vector("pts", "far", vec![9.0, 0.0], &meta).unwrap();
+
+        let results = engine.search("pts", &[0.0, 0.0], 2).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, "near");
+        assert_eq!(results[1].id, "far");
+    }
+
+    #[test]
+    fn given_hnsw_collection_then_search_routes_through_hnsw_index() {
+        let dir = temp_dir("hnsw_search_path");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                index_type: INDEX_TYPE_HNSW,
+            })
+            .unwrap();
+        let meta = VectorMetadata {
+            id: String::new(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("pts", "near", vec![1.0, 0.0], &meta).unwrap();
+        engine.insert_vector("pts", "far", vec![9.0, 0.0], &meta).unwrap();
+
+        let results = engine.search("pts", &[0.0, 0.0], 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "near");
     }
 }

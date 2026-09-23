@@ -69,7 +69,7 @@ func TestInsertVectorRoute(t *testing.T) {
 		server := routerTestSetup(t)
 		name := "router_test_insert_route"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		handler := buildRoutes(server)
@@ -110,7 +110,7 @@ func TestGetVectorRoute(t *testing.T) {
 		server := routerTestSetup(t)
 		name := "router_test_get_route"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 0.0, 0.0}, ""); err != nil {
@@ -153,7 +153,7 @@ func TestUpsertVectorRoute(t *testing.T) {
 		server := routerTestSetup(t)
 		name := "router_test_upsert_route"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		handler := buildRoutes(server)
@@ -194,7 +194,7 @@ func TestDeleteVectorRoute(t *testing.T) {
 		server := routerTestSetup(t)
 		name := "router_test_delete_route"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 0.0, 0.0}, ""); err != nil {
@@ -237,7 +237,7 @@ func TestInsertManyVectorRoute(t *testing.T) {
 		server := routerTestSetup(t)
 		name := "router_test_batch_route"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		handler := buildRoutes(server)

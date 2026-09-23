@@ -7,6 +7,7 @@ use self::shared::hairball::Hairball;
 use self::shared::results::{NekoMetadata, NekoSearchResult, NekoStats};
 
 pub mod engine;
+pub mod index;
 pub mod manifest;
 pub mod segment;
 pub mod shared;
@@ -53,7 +54,7 @@ pub extern "C" fn neko_shutdown() -> c_int {
 /// # Safety
 /// `name` must be a valid, null-terminated C string. `model` may be null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neko_create(name: *const c_char, dim: u32, metric: u8, model: *const c_char) -> c_int {
+pub unsafe extern "C" fn neko_create(name: *const c_char, dim: u32, metric: u8, model: *const c_char, index_type: u8) -> c_int {
     let raw_name_string = unsafe { c_str_to_string(name) };
     let name_str = match raw_name_string {
         Some(string) => string,
@@ -67,14 +68,16 @@ pub unsafe extern "C" fn neko_create(name: *const c_char, dim: u32, metric: u8, 
         None => return Hairball::InternalError as c_int,
     };
 
-    match engine.write().unwrap().create_clowder(CreateClowderDto {
+    if let Err(err) = engine.write().unwrap().create_clowder(CreateClowderDto {
         name: &name_str,
         dim,
         metric,
         model: model_str.as_deref(),
+        index_type,
     }) {
-        Ok(_) => 0,
-        Err(err) => err as c_int,
+        err as c_int
+    } else {
+        0
     }
 }
 
@@ -653,7 +656,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_create");
         let name = CString::new("ffi_test_create").unwrap();
-        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null()) };
+        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 0) };
         assert_eq!(result, 0, "create should succeed with valid params");
     }
 
@@ -662,9 +665,9 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_dup");
         let name = CString::new("ffi_test_dup").unwrap();
-        let first = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null()) };
+        let first = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 0) };
         assert_eq!(first, 0);
-        let second = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null()) };
+        let second = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 0) };
         assert_eq!(second, Hairball::AlreadyExists as i32);
     }
 
@@ -672,7 +675,7 @@ mod tests {
     fn given_invalid_name_then_create_returns_invalid_name() {
         ffi_init();
         let name = CString::new("!!!bad name!!!").unwrap();
-        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null()) };
+        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 0) };
         assert_eq!(result, Hairball::InvalidName as i32);
     }
 
@@ -681,7 +684,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_list");
         let name = CString::new("ffi_test_list").unwrap();
-        let _ = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null()) };
+        let _ = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 0) };
 
         let mut c_names: *mut *mut c_char = std::ptr::null_mut();
         let mut count: u32 = 0;
@@ -706,7 +709,7 @@ mod tests {
         ffi_cleanup("ffi_test_stats");
 
         let name = CString::new("ffi_test_stats").unwrap();
-        let _ = unsafe { neko_create(name.as_ptr(), 512, 2, std::ptr::null()) };
+        let _ = unsafe { neko_create(name.as_ptr(), 512, 2, std::ptr::null(), 0) };
 
         let mut stats = NekoStats {
             vector_count: 0,
@@ -728,7 +731,7 @@ mod tests {
         ffi_cleanup("ffi_test_drop");
 
         let name = CString::new("ffi_test_drop").unwrap();
-        let create_result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null()) };
+        let create_result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 0) };
         assert_eq!(create_result, 0, "create should succeed after cleanup");
 
         let result = unsafe { neko_drop(name.as_ptr()) };
@@ -757,7 +760,7 @@ mod tests {
 
         let name = CString::new("ffi_test_model").unwrap();
         let model = CString::new("all-MiniLM-L6-v2").unwrap();
-        let result = unsafe { neko_create(name.as_ptr(), 384, 1, model.as_ptr()) };
+        let result = unsafe { neko_create(name.as_ptr(), 384, 1, model.as_ptr(), 0) };
         assert_eq!(result, 0);
 
         let mut stats = NekoStats {
@@ -777,7 +780,7 @@ mod tests {
         ffi_cleanup("ffi_test_null_model");
 
         let name = CString::new("ffi_test_null_model").unwrap();
-        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null()) };
+        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 0) };
         assert_eq!(result, 0);
     }
 
@@ -790,7 +793,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 3] = [7.0, 8.0, 9.0];
 
-        let result = unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+        let result = unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null(), 0) };
         assert_eq!(result, 0);
 
         let result = unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
@@ -812,7 +815,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 2] = [1.0, 2.0];
 
-        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null(), 0) };
 
         let result = unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 2, std::ptr::null()) };
         assert_eq!(result, Hairball::DimMismatch as i32);
@@ -825,7 +828,7 @@ mod tests {
 
         let collection = CString::new("ffi_test_get_nf").unwrap();
         let doc_id = CString::new("no_such_doc").unwrap();
-        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null(), 0) };
 
         let mut out = vec![0.0_f32; 3];
         let result = unsafe { neko_get(collection.as_ptr(), doc_id.as_ptr(), out.as_mut_ptr(), 3) };
@@ -851,7 +854,7 @@ mod tests {
 
         let collection = CString::new("ffi_test_nullvec").unwrap();
         let doc_id = CString::new("doc1").unwrap();
-        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null(), 0) };
 
         let result = unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), std::ptr::null(), 3, std::ptr::null()) };
         assert_eq!(result, Hairball::DimTooSmall as i32);
@@ -867,7 +870,7 @@ mod tests {
         let vector: [f32; 2] = [9.0, 10.0];
         let metadata_json = CString::new(r#"{"key":"value","score":42}"#).unwrap();
 
-        unsafe { neko_create(collection.as_ptr(), 2, 1, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 2, 1, std::ptr::null(), 0) };
 
         let result = unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 2, metadata_json.as_ptr()) };
         assert_eq!(result, 0);
@@ -888,7 +891,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 3] = [7.0, 8.0, 9.0];
 
-        let result = unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+        let result = unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null(), 0) };
         assert_eq!(result, 0);
 
         let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null(), std::ptr::null_mut()) };
@@ -911,7 +914,7 @@ mod tests {
         let first: [f32; 3] = [1.0, 0.0, 0.0];
         let second: [f32; 3] = [0.0, 1.0, 0.0];
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), first.as_ptr(), 3, std::ptr::null()) };
         unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), second.as_ptr(), 3, std::ptr::null(), std::ptr::null_mut()) };
@@ -930,7 +933,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 2] = [1.0, 2.0];
 
-        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null(), 0) };
 
         let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 2, std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(result, Hairball::DimMismatch as i32);
@@ -955,7 +958,7 @@ mod tests {
 
         let collection = CString::new("ffi_test_upsert_nullvec").unwrap();
         let doc_id = CString::new("doc1").unwrap();
-        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 1, std::ptr::null(), 0) };
 
         let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), std::ptr::null(), 3, std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(result, Hairball::DimTooSmall as i32);
@@ -966,7 +969,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_search_empty");
         let collection = CString::new("ffi_test_search_empty").unwrap();
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         let query: [f32; 3] = [1.0, 0.0, 0.0];
         let mut results = NekoSearchResult {
@@ -987,7 +990,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_search_l2");
         let collection = CString::new("ffi_test_search_l2").unwrap();
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         let doc_a = CString::new("a").unwrap();
         let doc_b = CString::new("b").unwrap();
@@ -1041,7 +1044,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_search_nullq");
         let collection = CString::new("ffi_test_search_nullq").unwrap();
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         let mut results = NekoSearchResult {
             total: 0,
@@ -1066,7 +1069,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 3] = [1.0, 2.0, 3.0];
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
         unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
 
         let result = unsafe { neko_delete(collection.as_ptr(), doc_id.as_ptr()) };
@@ -1085,7 +1088,7 @@ mod tests {
         let collection = CString::new("ffi_test_delete_nf").unwrap();
         let doc_id = CString::new("ghost").unwrap();
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         let result = unsafe { neko_delete(collection.as_ptr(), doc_id.as_ptr()) };
         assert_eq!(result, Hairball::NotFound as i32);
@@ -1121,7 +1124,7 @@ mod tests {
         let vector: [f32; 3] = [1.0, 2.0, 3.0];
         let metadata_json = CString::new(r#"{"author":"alice"}"#).unwrap();
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
         let result = unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, metadata_json.as_ptr()) };
         assert_eq!(result, 0);
 
@@ -1146,7 +1149,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 3] = [4.0, 5.0, 6.0];
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
         let result = unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null()) };
         assert_eq!(result, 0);
 
@@ -1170,7 +1173,7 @@ mod tests {
         let collection = CString::new("ffi_test_get_vector_nf_id").unwrap();
         let doc_id = CString::new("ghost").unwrap();
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         let mut out = vec![0.0_f32; 3];
         let mut meta: NekoMetadata = NekoMetadata { metadata: std::ptr::null_mut() };
@@ -1205,7 +1208,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 3] = [1.0, 2.0, 3.0];
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         let mut created: u8 = 0;
         let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null(), &mut created) };
@@ -1223,7 +1226,7 @@ mod tests {
         let first: [f32; 3] = [1.0, 0.0, 0.0];
         let second: [f32; 3] = [0.0, 1.0, 0.0];
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
         unsafe { neko_insert(collection.as_ptr(), doc_id.as_ptr(), first.as_ptr(), 3, std::ptr::null()) };
 
         let mut created: u8 = 99;
@@ -1241,7 +1244,7 @@ mod tests {
         let doc_id = CString::new("doc1").unwrap();
         let vector: [f32; 3] = [4.0, 5.0, 6.0];
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(result, 0, "upsert must accept a null created pointer and still succeed");
@@ -1257,7 +1260,7 @@ mod tests {
         let vector: [f32; 3] = [7.0, 8.0, 9.0];
         let metadata = CString::new(r#"{"author":"alice"}"#).unwrap();
 
-        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) };
+        unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) };
 
         let mut created: u8 = 0;
         let result = unsafe { neko_upsert(collection.as_ptr(), doc_id.as_ptr(), vector.as_ptr(), 3, metadata.as_ptr(), &mut created) };
@@ -1270,7 +1273,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_insert_many_basic");
         let collection = CString::new("ffi_test_insert_many_basic").unwrap();
-        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) }, 0);
 
         let id_one = CString::new("doc1").unwrap();
         let id_two = CString::new("doc2").unwrap();
@@ -1313,7 +1316,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_insert_many_dim");
         let collection = CString::new("ffi_test_insert_many_dim").unwrap();
-        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) }, 0);
 
         let id = CString::new("doc1").unwrap();
         let wrong_dim_vector: [f32; 2] = [1.0, 2.0];
@@ -1351,7 +1354,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_insert_many_count_zero");
         let collection = CString::new("ffi_test_insert_many_count_zero").unwrap();
-        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) }, 0);
 
         let code = unsafe { neko_insert_many(collection.as_ptr(), std::ptr::null(), 0) };
         assert_eq!(code, Hairball::InternalError as c_int);
@@ -1387,7 +1390,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_insert_many_null_vec");
         let collection = CString::new("ffi_test_insert_many_null_vec").unwrap();
-        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) }, 0);
 
         let id = CString::new("doc1").unwrap();
         let items = vec![NekoInputVector {
@@ -1406,7 +1409,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_insert_many_meta");
         let collection = CString::new("ffi_test_insert_many_meta").unwrap();
-        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null()) }, 0);
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 3, 0, std::ptr::null(), 0) }, 0);
 
         let id = CString::new("doc1").unwrap();
         let vector: [f32; 3] = [1.0, 2.0, 3.0];
@@ -1436,7 +1439,7 @@ mod tests {
         ffi_init();
         ffi_cleanup("ffi_test_insert_many_cosine");
         let collection = CString::new("ffi_test_insert_many_cosine").unwrap();
-        assert_eq!(unsafe { neko_create(collection.as_ptr(), 2, 1, std::ptr::null()) }, 0);
+        assert_eq!(unsafe { neko_create(collection.as_ptr(), 2, 1, std::ptr::null(), 0) }, 0);
 
         let id = CString::new("doc1").unwrap();
         let vector: [f32; 2] = [3.0, 4.0];
@@ -1454,5 +1457,31 @@ mod tests {
         let get_code = unsafe { neko_get(collection.as_ptr(), id.as_ptr(), retrieved.as_mut_ptr(), 2) };
         assert_eq!(get_code, 0);
         assert_eq!(retrieved, [0.6, 0.8], "cosine metric must normalise [3, 4] to [3/5, 4/5]");
+    }
+
+    #[test]
+    fn given_create_with_index_type_brute_then_succeeds() {
+        ffi_init();
+        ffi_cleanup("ffi_test_create_brute");
+        let name = CString::new("ffi_test_create_brute").unwrap();
+        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 0) };
+        assert_eq!(result, 0, "create with index_type=0 (brute) should succeed");
+    }
+
+    #[test]
+    fn given_create_with_index_type_hnsw_then_succeeds() {
+        ffi_init();
+        ffi_cleanup("ffi_test_create_hnsw");
+        let name = CString::new("ffi_test_create_hnsw").unwrap();
+        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 1) };
+        assert_eq!(result, 0, "create with index_type=1 (hnsw) should succeed");
+    }
+
+    #[test]
+    fn given_create_with_index_type_two_then_returns_invalid_metric() {
+        ffi_init();
+        let name = CString::new("ffi_test_create_bad_index").unwrap();
+        let result = unsafe { neko_create(name.as_ptr(), 384, 1, std::ptr::null(), 2) };
+        assert_eq!(result, Hairball::InvalidMetric as i32);
     }
 }

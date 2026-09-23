@@ -2,6 +2,7 @@ use crate::shared::hairball::Hairball;
 use crate::shared::results::Result;
 
 use super::resource::MAX_DIM;
+use crate::index::factory::{INDEX_TYPE_BRUTE, INDEX_TYPE_HNSW};
 
 pub struct EngineValidator;
 
@@ -34,6 +35,15 @@ impl EngineValidator {
         if metric > 2 {
             return Err(Hairball::InvalidMetric);
         }
+
+        Ok(())
+    }
+
+    pub fn index_type(index_type: u8) -> Result<()> {
+        let is_invalid_metric = index_type != INDEX_TYPE_BRUTE && index_type != INDEX_TYPE_HNSW;
+        if is_invalid_metric {
+            return Err(Hairball::InvalidMetric);
+        };
 
         Ok(())
     }
@@ -141,5 +151,25 @@ mod tests {
     fn given_valid_dim_then_returns_ok() {
         assert!(EngineValidator::dim(384).is_ok());
         assert!(EngineValidator::dim(1).is_ok());
+    }
+
+    #[test]
+    fn given_index_type_brute_then_returns_ok() {
+        assert!(EngineValidator::index_type(INDEX_TYPE_BRUTE).is_ok());
+    }
+
+    #[test]
+    fn given_index_type_hnsw_then_returns_ok() {
+        assert!(EngineValidator::index_type(INDEX_TYPE_HNSW).is_ok());
+    }
+
+    #[test]
+    fn given_index_type_two_then_returns_invalid_metric() {
+        assert_eq!(EngineValidator::index_type(2).unwrap_err(), Hairball::InvalidMetric);
+    }
+
+    #[test]
+    fn given_index_type_max_then_returns_invalid_metric() {
+        assert_eq!(EngineValidator::index_type(255).unwrap_err(), Hairball::InvalidMetric);
     }
 }

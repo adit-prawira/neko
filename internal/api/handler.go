@@ -101,7 +101,7 @@ func (s *Server) HandleCreateCollection(rw http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := ffi.Create(body.Name, body.Dim, metricCode, ""); err != nil {
+	if err := ffi.Create(body.Name, body.Dim, metricCode, "", ffi.IndexTypeBrute); err != nil {
 		WriteFFIError(rw, err)
 		return
 	}

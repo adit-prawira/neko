@@ -21,6 +21,11 @@ const (
 	MetricDot    = 2
 )
 
+const (
+	IndexTypeBrute = 0
+	IndexTypeHnsw  = 1
+)
+
 type NekoStats struct {
 	VectorCount  uint64
 	Dim          uint32
@@ -106,7 +111,7 @@ func ShutDown() error {
 	return nil
 }
 
-func Create(name string, dim uint32, metric uint8, model string) error {
+func Create(name string, dim uint32, metric uint8, model string, indexType uint8) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	var cModel *C.char
@@ -115,7 +120,7 @@ func Create(name string, dim uint32, metric uint8, model string) error {
 		defer C.free(unsafe.Pointer(cModel))
 	}
 
-	code := C.neko_create(cName, C.uint32_t(dim), C.uint8_t(metric), cModel)
+	code := C.neko_create(cName, C.uint32_t(dim), C.uint8_t(metric), cModel, C.uint8_t(indexType))
 	if code != 0 {
 		return newHairballError("neko_create", int(code))
 	}

@@ -10,4 +10,7 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub segments: Vec<String>,
+
+    #[serde(default)]
+    pub index_type: u8,
 }

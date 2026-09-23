@@ -29,7 +29,7 @@ func (cs *CollectionService) Create(_ context.Context, req *nekov1.CreateCollect
 		return nil, StatusError(CodeInvalidArgument, err.Error())
 	}
 
-	if err := ffi.Create(req.Name, req.Dim, metricCode, ""); err != nil {
+	if err := ffi.Create(req.Name, req.Dim, metricCode, "", ffi.IndexTypeBrute); err != nil {
 		return nil, HairballToGRPCStatus(err)
 	}
 

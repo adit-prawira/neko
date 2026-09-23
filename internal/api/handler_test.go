@@ -203,7 +203,7 @@ func TestHandleGetCollections(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_list_collections"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 256, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 256, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("failed to create collection: %v", err)
 		}
 
@@ -239,7 +239,7 @@ func TestHandleGetCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_get_collection"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 128, ffi.MetricDot, ""); err != nil {
+		if err := ffi.Create(name, 128, ffi.MetricDot, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("failed to create collection: %v", err)
 		}
 
@@ -285,7 +285,7 @@ func TestHandleDropCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_drop_collection"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 64, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 64, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("failed to create collection: %v", err)
 		}
 
@@ -324,7 +324,7 @@ func TestHandleSearchCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_search_l2"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "far", []float32{10.0, 0.0, 0.0}, ""); err != nil {
@@ -374,7 +374,7 @@ func TestHandleSearchCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_search_empty"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -401,7 +401,7 @@ func TestHandleSearchCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_search_topk_large"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "near", []float32{2.0, 0.0, 0.0}, ""); err != nil {
@@ -452,7 +452,7 @@ func TestHandleSearchCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_search_dim_mismatch"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -474,7 +474,7 @@ func TestHandleSearchCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_search_empty_vector"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -496,7 +496,7 @@ func TestHandleSearchCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_search_default_topk"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		for index := range 11 {
@@ -529,7 +529,7 @@ func TestHandleSearchCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_search_explicit_zero"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "near", []float32{2.0, 0.0, 0.0}, ""); err != nil {
@@ -559,7 +559,7 @@ func TestHandleSearchCollection(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_search_malformed"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -580,7 +580,7 @@ func TestHandleUpsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_upsert_create"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -608,7 +608,7 @@ func TestHandleUpsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_upsert_update"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 0.0, 0.0}, ""); err != nil {
@@ -639,7 +639,7 @@ func TestHandleUpsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_upsert_bad_json"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -663,7 +663,7 @@ func TestHandleUpsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_upsert_empty"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -687,7 +687,7 @@ func TestHandleUpsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_upsert_dim"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -732,7 +732,7 @@ func TestHandleInsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_insert_happy"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -759,7 +759,7 @@ func TestHandleInsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_insert_with_metadata"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 2, ffi.MetricCosine, ""); err != nil {
+		if err := ffi.Create(name, 2, ffi.MetricCosine, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -779,7 +779,7 @@ func TestHandleInsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_insert_no_id"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -802,7 +802,7 @@ func TestHandleInsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_insert_empty_id"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -825,7 +825,7 @@ func TestHandleInsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_insert_dim_mismatch"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -867,7 +867,7 @@ func TestHandleInsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_insert_empty_vec"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -890,7 +890,7 @@ func TestHandleInsertVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_insert_malformed"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -912,7 +912,7 @@ func TestHandleGetVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_get_with_meta"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, `{"author":"alice"}`); err != nil {
@@ -942,7 +942,7 @@ func TestHandleGetVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_get_no_meta"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
@@ -988,7 +988,7 @@ func TestHandleGetVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_get_no_id"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -1011,7 +1011,7 @@ func TestHandleGetVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_get_cosine"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricCosine, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricCosine, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
@@ -1052,7 +1052,7 @@ func TestHandleDeleteVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_delete_existing"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
@@ -1097,7 +1097,7 @@ func TestHandleDeleteVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_delete_no_id"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -1120,7 +1120,7 @@ func TestHandleDeleteVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_delete_then_get"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 		if err := ffi.Insert(name, "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
@@ -1156,7 +1156,7 @@ func TestHandleInsertManyVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_batch_happy"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -1251,7 +1251,7 @@ func TestHandleInsertManyVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_batch_empty_id"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 
@@ -1274,7 +1274,7 @@ func TestHandleInsertManyVector(t *testing.T) {
 		server := apiTestSetup(t)
 		name := "api_test_batch_dim"
 		defer func() { _ = ffi.Drop(name) }()
-		if err := ffi.Create(name, 3, ffi.MetricL2, ""); err != nil {
+		if err := ffi.Create(name, 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
 			t.Fatalf("create failed: %v", err)
 		}
 

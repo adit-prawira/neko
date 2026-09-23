@@ -20,6 +20,7 @@ impl ManifestManager {
                 metric,
                 segments: Vec::new(),
                 model: None,
+                index_type: 0,
             }
         };
 
@@ -45,6 +46,7 @@ impl ManifestManager {
                 metric: 0,
                 segments: Vec::new(),
                 model: None,
+                index_type: 0,
             }
         };
 
@@ -74,6 +76,7 @@ impl ManifestManager {
                 metric: 0,
                 model: None,
                 segments: Vec::new(),
+                index_type: 0,
             })
         }
     }
@@ -158,6 +161,7 @@ mod tests {
             metric: 1,
             model: Some("all-MiniLM-L6-v2".to_string()),
             segments: vec!["seg_001".to_string()],
+            index_type: 0,
         };
 
         ManifestManager::save_manifest(&manifest_path, &manifest).unwrap();
@@ -187,6 +191,7 @@ mod tests {
             metric: 0,
             model: None,
             segments: vec![],
+            index_type: 0,
         };
 
         ManifestManager::save_manifest(&manifest_path, &manifest).unwrap();
@@ -223,6 +228,7 @@ mod tests {
             metric: 2,
             model: None,
             segments: vec![],
+            index_type: 0,
         };
 
         ManifestManager::save_manifest(&manifest_path, &manifest).unwrap();

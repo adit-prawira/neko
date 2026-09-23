@@ -96,7 +96,7 @@ func TestCreateAndDrop(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_create")
 
-	if err := Create("go_test_create", 384, MetricCosine, ""); err != nil {
+	if err := Create("go_test_create", 384, MetricCosine, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -109,11 +109,11 @@ func TestCreateDuplicateFails(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_dup")
 
-	if err := Create("go_test_dup", 384, MetricCosine, ""); err != nil {
+	if err := Create("go_test_dup", 384, MetricCosine, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	if err := Create("go_test_dup", 384, MetricCosine, ""); err == nil {
+	if err := Create("go_test_dup", 384, MetricCosine, "", IndexTypeBrute); err == nil {
 		t.Error("expected error for duplicate collection")
 	}
 	testCleanup("go_test_dup")
@@ -123,7 +123,7 @@ func TestListAndStats(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_list")
 
-	if err := Create("go_test_list", 512, MetricDot, ""); err != nil {
+	if err := Create("go_test_list", 512, MetricDot, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -181,7 +181,7 @@ func TestCreateWithModel(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_model")
 
-	if err := Create("go_test_model", 384, MetricCosine, "test-model"); err != nil {
+	if err := Create("go_test_model", 384, MetricCosine, "test-model", IndexTypeBrute); err != nil {
 		t.Fatalf("Create with model failed: %v", err)
 	}
 	testCleanup("go_test_model")
@@ -191,7 +191,7 @@ func TestInsertAndGet(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_insert_get")
 
-	if err := Create("go_test_insert_get", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_insert_get", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -213,7 +213,7 @@ func TestInsertDimMismatch(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_insert_dim")
 
-	if err := Create("go_test_insert_dim", 3, MetricCosine, ""); err != nil {
+	if err := Create("go_test_insert_dim", 3, MetricCosine, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -236,7 +236,7 @@ func TestGetNonexistentId(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_get_nf")
 
-	if err := Create("go_test_get_nf", 3, MetricCosine, ""); err != nil {
+	if err := Create("go_test_get_nf", 3, MetricCosine, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -250,7 +250,7 @@ func TestInsertWithEmptyVector(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_empty_vec")
 
-	if err := Create("go_test_empty_vec", 3, MetricCosine, ""); err != nil {
+	if err := Create("go_test_empty_vec", 3, MetricCosine, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -264,7 +264,7 @@ func TestUpsertAndGet(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_upsert_get")
 
-	if err := Create("go_test_upsert_get", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_upsert_get", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -286,7 +286,7 @@ func TestUpsertExistingReplaces(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_upsert_replace")
 
-	if err := Create("go_test_upsert_replace", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_upsert_replace", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -310,7 +310,7 @@ func TestUpsertDimMismatch(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_upsert_dim")
 
-	if err := Create("go_test_upsert_dim", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_upsert_dim", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -333,7 +333,7 @@ func TestUpsertWithEmptyVector(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_upsert_empty")
 
-	if err := Create("go_test_upsert_empty", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_upsert_empty", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestSearchReturnsNearest(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_search")
 
-	if err := Create("go_test_search", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_search", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -376,7 +376,7 @@ func TestSearchEmptyQuery(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_search_eq")
 
-	if err := Create("go_test_search_eq", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_search_eq", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -407,7 +407,7 @@ func TestDeleteExistingVector(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_delete")
 
-	if err := Create("go_test_delete", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_delete", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -430,7 +430,7 @@ func TestDeleteNonexistentId(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_delete_nf")
 
-	if err := Create("go_test_delete_nf", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_delete_nf", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -451,7 +451,7 @@ func TestUpsertReturnsCreatedTrueForNewVector(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_upsert_created_true")
 
-	if err := Create("go_test_upsert_created_true", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_upsert_created_true", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -468,7 +468,7 @@ func TestUpsertReturnsCreatedFalseForExistingVector(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_upsert_created_false")
 
-	if err := Create("go_test_upsert_created_false", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_upsert_created_false", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -489,7 +489,7 @@ func TestUpsertEmptyVectorReturnsHairballError(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_upsert_empty_hairball")
 
-	if err := Create("go_test_upsert_empty_hairball", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_upsert_empty_hairball", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -511,7 +511,7 @@ func TestUpsertRoundTripsMetadata(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_upsert_metadata")
 
-	if err := Create("go_test_upsert_metadata", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_upsert_metadata", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -533,7 +533,7 @@ func TestUpsertRoundTripsMetadata(t *testing.T) {
 func TestInsertManyRoundTrips(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_insert_many_basic")
-	if err := Create("go_test_insert_many_basic", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_insert_many_basic", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
@@ -583,7 +583,7 @@ func TestInsertManyNonexistentClowder(t *testing.T) {
 func TestInsertManyWrongDim(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_insert_many_dim")
-	if err := Create("go_test_insert_many_dim", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_insert_many_dim", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	items := []InputVector{
@@ -605,7 +605,7 @@ func TestInsertManyWrongDim(t *testing.T) {
 func TestInsertManyPersistsMetadata(t *testing.T) {
 	testInit(t)
 	testCleanup("go_test_insert_many_meta")
-	if err := Create("go_test_insert_many_meta", 3, MetricL2, ""); err != nil {
+	if err := Create("go_test_insert_many_meta", 3, MetricL2, "", IndexTypeBrute); err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	items := []InputVector{

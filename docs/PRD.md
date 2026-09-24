@@ -62,10 +62,11 @@ Neko is a **local-first vector database** that developers install on their machi
 - [ ] Single static binary build
 
 ### Phase 1 — Indexing (v0.2)
-- [ ] HNSW index (layered graph, beam search, pruning)
+- [x] HNSW index (layered graph, beam search, pruning) — **shipped in-memory** via `neko create --index hnsw` (issue #52, PR #60). Lost on restart; graph rebuilt from WAL-replayed vectors on next startup. Persistence deferred to a follow-up.
 - [ ] Product quantization (PQ48, PQ24)
-- [ ] HNSW index persistence (save graph to disk, reload on restart)
-- [ ] Smarter shard-aware search strategy
+- [ ] HNSW graph persistence to disk (currently rebuilt from in-memory vectors on each restart)
+- [ ] HNSW tuning flags (`--m`, `--ef-construction`, `--ef-search`)
+- [ ] Smarter shard-aware search strategy (Rayon parallel search across segments)
 - [ ] `neko tui` — Bubble Tea interactive dashboard
 
 ### Phase 2 — Embeddings (v0.3)

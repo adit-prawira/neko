@@ -161,14 +161,14 @@ with 384 dimensions.
         ▼  (Phase 2+) ONNX Runtime → embed text → [f32; 384]
         │  (Phase 0)  Raw vector from CLI/API directly
         ▼
-  Rust brute-force KNN → C SIMD dot_product() on all vectors
-        │       (Phase 1+) HNSW beam search across layered graph
-        │       batch eval → C batch_distance() (4x unrolled matrix kernel)
-        ▼
- Rust returns top-k (id, score) pairs
-        │
-        ▼
- Go API — lookup metadata from BTree, format response
+Rust brute-force KNN → C SIMD dot_product() on all vectors
+         │       (or) HNSW beam search across layered graph (PR #60, in-memory only, lost on restart)
+         │       batch eval → C batch_distance() (4x unrolled matrix kernel)
+         ▼
+  Rust returns top-k (id, score) pairs
+         │
+         ▼
+  Go API — lookup metadata from BTree, format response
         │
         ▼
  HTTP JSON / CLI output / TUI render
@@ -186,8 +186,10 @@ with 384 dimensions.
 
 // — Collections —
 // model may be null → uses default model (all-MiniLM-L6-v2)
+// index_type selects the index backend: 0 = brute, 1 = HNSW (in-memory only, lost on restart)
 #[unsafe(no_mangle)] pub extern "C" fn neko_create(name: *const c_char, dim: u32,
-                                             metric: u8, model: *const c_char) -> i32;
+                                             metric: u8, model: *const c_char,
+                                             index_type: u8) -> i32;
 #[unsafe(no_mangle)] pub extern "C" fn neko_drop(name: *const c_char) -> i32;
 #[unsafe(no_mangle)] pub extern "C" fn neko_list(
     names: *mut *mut *mut c_char, count: *mut u32) -> i32;
@@ -268,7 +270,9 @@ struct Clowder {
     dim: u32,
     metric: u8,                          // 0 = L2, 1 = cosine, 2 = dot
     model: Option<String>,               // bound model name (Phase 2+)
-    vectors: Mutex<HashMap<String, Vec<f32>>>,   // id -> raw f32 vector
+    index_type: u8,                      // 0 = brute, 1 = HNSW — serialized in Manifest
+    index: Arc<dyn Index>,               // pluggable: BruteIndex or HnswIndex<D>
+    vectors: Mutex<HashMap<String, Vec<f32>>>,   // id -> raw f32 vector (WAL replay source)
     metadata: Mutex<HashMap<String, String>>,    // id -> raw JSON metadata string
 }
 
@@ -285,10 +289,19 @@ Locking strategy:
 - `Engine.clowders`: `RwLock` — read for most operations, write for create/drop
 - `Clowder.vectors`: `Mutex` — serialized on every insert/get/delete
 - `Clowder.metadata`: `Mutex` — serialized on every insert/get/delete
+- `Clowder.index`: trait object, methods internally synchronize via their own `Mutex`es
 
 All FFI functions acquire the engine lock first, then operate on the clowder.
-Insert path: `engine.read() → clowder.vectors.lock() → write → release`
-Search path: `engine.read() → clowder.vectors.lock() → clone reference → release → SIMD scan`
+Insert path: `engine.read() → clowder.vectors.lock() → write → release → index.insert(...)`
+Search path: `engine.read() → clowder.vectors.lock() → clone reference → release → index.search(...)`
+
+Index abstraction (PR #61): the `Index` trait (`engine/src/index/resource.rs`) sits between
+`Clowder` and the actual algorithm. `BruteIndex` wraps the existing KNN scan and owns cosine
+normalization (zero-vector safe). `HnswIndex<D>` wraps `hnsw_rs` for `D = DistL2 | DistCosine | DistDot`
+and exposes a `rebuild_from(&HashMap<...>)` method that the engine calls on startup to repopulate
+the graph after WAL replay. New index types (PQ, IVF) plug into the trait without Engine changes.
+HNSW refuses delete and upsert-on-existing-id (returns `InternalError`); hard-delete support is
+deferred to a follow-up.
 
 ## WAL Rotation & Compaction
 

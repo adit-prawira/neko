@@ -25,9 +25,12 @@ neko config init
 neko serve
 
 # Create a collection, insert a vector, and search
-neko create docs --dim 384
+neko create docs --dim 384 --metric cosine --index brute
 neko insert docs --id doc1 --file query.f32
 neko search docs --file query.f32 --k 10
+
+# Optional: same shape, but with the HNSW index for sub-linear search
+neko create docs_hnsw --dim 384 --metric cosine --index hnsw
 
 # Benchmark insert + search throughput
 neko bench --vectors 100000 --dim 384 --k 10
@@ -55,7 +58,8 @@ open http://localhost:3434/swagger/index.html
 | REST API (11 endpoints) | Shipped |
 | OpenAPI spec + Swagger UI (`/swagger/`) | Shipped |
 | gRPC API | 10 collection + vector RPCs shipped (PR #38); full status mapping + parity test (PR #39) |
-| HNSW index, TUI | Phase 1 |
+| Pluggable `Index` trait (Brute + HNSW) | Shipped in-memory, lost on restart (PR #60) |
+| HNSW graph persistence, TUI | Phase 1 |
 | Bundled embedding model, `neko embed` | Phase 2 |
 | Clustering, replication | Phase 3 |
 

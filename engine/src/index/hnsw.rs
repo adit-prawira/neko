@@ -4,11 +4,10 @@ use std::sync::Mutex;
 use hnsw_rs::hnsw::{Hnsw, Neighbour};
 use hnsw_rs::prelude::Distance;
 
-use crate::engine::knn::ScoredVector;
 use crate::shared::hairball::Hairball;
 use crate::shared::results::Result;
 
-use super::resource::{Index, InputVector};
+use super::resource::{Index, InputVector, ScoredVector};
 
 pub const DEFAULT_MAX_NB_CONNECTION: usize = 16;
 pub const DEFAULT_EF_CONSTRUCTION: usize = 200;
@@ -67,7 +66,7 @@ impl<D> Index for HnswIndex<D>
 where
     D: Distance<f32> + Send + Sync + 'static,
 {
-    fn search(&self, _vectors: &HashMap<String, Vec<f32>>, query: &[f32], top_k: usize, _metric: u8, _dim: u32) -> Result<Vec<crate::engine::knn::ScoredVector>> {
+    fn search(&self, _vectors: &HashMap<String, Vec<f32>>, query: &[f32], top_k: usize, _metric: u8, _dim: u32) -> Result<Vec<ScoredVector>> {
         if query.len() != self.dim {
             return Err(Hairball::DimMismatch);
         }
@@ -123,6 +122,30 @@ where
             graph.insert((vector.as_slice(), *internal_id));
         }
         Ok(())
+    }
+
+    fn prepare_vector_for_insert(&self, vector: &[f32]) -> Result<Vec<f32>> {
+        Ok(vector.to_vec())
+    }
+
+    fn is_support_delete(&self) -> bool {
+        false
+    }
+
+    fn is_support_upsert(&self) -> bool {
+        false
+    }
+
+    fn rebuild_from(&self, vectors: &HashMap<String, Vec<f32>>) -> Result<()> {
+        let items: Vec<InputVector> = vectors
+            .iter()
+            .map(|(id, vector)| InputVector {
+                id: id.to_string(),
+                vector: vector.clone(),
+            })
+            .collect();
+
+        self.insert_batch(&items)
     }
 }
 
@@ -356,5 +379,34 @@ mod tests {
 
         let per_vector_nanos = elapsed.as_nanos() / count as u128;
         assert!(per_vector_nanos < 1_000_000, "per-vector insert was {} ns, expected < 1_000_000", per_vector_nanos);
+    }
+
+    #[test]
+    fn given_hnsw_index_then_prepare_vector_returns_vector_unchanged_for_cosine_metric() {
+        let index = build_l2_index(3);
+        let prepared = index.prepare_vector_for_insert(&[3.0, 4.0, 0.0]).unwrap();
+        assert_eq!(prepared, vec![3.0, 4.0, 0.0]);
+    }
+
+    #[test]
+    fn given_hnsw_index_then_is_support_delete_returns_false() {
+        let index = build_l2_index(2);
+        assert!(!index.is_support_delete());
+    }
+
+    #[test]
+    fn given_hnsw_index_then_is_support_upsert_returns_false() {
+        let index = build_l2_index(2);
+        assert!(!index.is_support_upsert());
+    }
+
+    #[test]
+    fn given_hnsw_index_then_rebuild_from_populates_graph_for_search() {
+        let index = build_l2_index(2);
+        let vectors: HashMap<String, Vec<f32>> = vec![("near".to_string(), vec![1.0, 0.0]), ("far".to_string(), vec![9.0, 0.0])].into_iter().collect();
+        index.rebuild_from(&vectors).unwrap();
+        let results = index.search(&HashMap::new(), &[1.0, 0.0], 1, 0, 2).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "near");
     }
 }

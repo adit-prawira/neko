@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::index::factory::{INDEX_TYPE_BRUTE, INDEX_TYPE_HNSW, IndexFactory};
-use crate::index::resource::InputVector;
+use crate::index::resource::{InputVector, ScoredVector};
 use crate::manifest::manager::ManifestManager;
 use crate::manifest::resource::Manifest;
 use crate::segment::resource::VectorMetadata;
@@ -14,7 +14,6 @@ use crate::wal::replayer::WalReplayer;
 use crate::wal::resource::WalEntry;
 use crate::wal::writer::WalWriter;
 
-use super::knn::ScoredVector;
 use super::resource::Clowder;
 use super::validator::EngineValidator;
 
@@ -118,20 +117,8 @@ impl Engine {
         }
 
         for clowder in clowders.values() {
-            if clowder.index_type != INDEX_TYPE_HNSW {
-                continue;
-            }
-            let snapshot: Vec<InputVector> = {
-                let vectors = clowder.vectors.lock().unwrap();
-                vectors
-                    .iter()
-                    .map(|(id, vector)| InputVector {
-                        id: id.to_string(),
-                        vector: vector.clone(),
-                    })
-                    .collect()
-            };
-            clowder.index.insert_batch(&snapshot)?;
+            let vectors = clowder.vectors.lock().unwrap();
+            clowder.index.rebuild_from(&vectors)?;
         }
 
         let wal = WalWriter::open(&collection_directory, 64)
@@ -251,16 +238,7 @@ impl Engine {
             return Err(Hairball::DimMismatch);
         }
 
-        let mut normalised_vector = vector;
-        if clowder.metric == 1 && clowder.index_type == INDEX_TYPE_BRUTE {
-            let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
-            if normalised_squares > 1e-18 {
-                let inverse_normal = 1.0 / normalised_squares.sqrt();
-                for component in &mut normalised_vector {
-                    *component *= inverse_normal;
-                }
-            }
-        }
+        let normalised_vector = clowder.index.prepare_vector_for_insert(&vector)?;
 
         let wal_id = format!("{}:{}", name, id);
         if let Some(ref mut wal) = self.wal {
@@ -284,16 +262,10 @@ impl Engine {
         let normalised_input_vectors: Vec<InputVectorDto> = input_vectors
             .into_iter()
             .map(|input_vector| {
-                let mut normalised_vector = input_vector.vector;
-                if clowder.metric == 1 && clowder.index_type == INDEX_TYPE_BRUTE {
-                    let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
-                    if normalised_squares > 1e-18 {
-                        let inverse_normal = 1.0 / normalised_squares.sqrt();
-                        for component in &mut normalised_vector {
-                            *component *= inverse_normal;
-                        }
-                    }
-                }
+                let normalised_vector = clowder
+                    .index
+                    .prepare_vector_for_insert(&input_vector.vector)
+                    .unwrap_or_else(|_| input_vector.vector.clone());
                 InputVectorDto {
                     id: input_vector.id,
                     vector: normalised_vector,
@@ -369,22 +341,14 @@ impl Engine {
         if vector.len() != clowder.dim as usize {
             return Err(Hairball::DimMismatch);
         }
-        if clowder.index_type == INDEX_TYPE_HNSW {
+        if !clowder.index.is_support_upsert() {
             let exists = clowder.vectors.lock().unwrap().contains_key(id);
             if exists {
                 return Err(Hairball::InternalError);
             }
         }
-        let mut normalised_vector = vector;
-        if clowder.metric == 1 && clowder.index_type == INDEX_TYPE_BRUTE {
-            let normalised_squares: f32 = normalised_vector.iter().map(|x| x * x).sum();
-            if normalised_squares > 1e-18 {
-                let inverse_normal = 1.0 / normalised_squares.sqrt();
-                for component in &mut normalised_vector {
-                    *component *= inverse_normal;
-                }
-            }
-        }
+
+        let normalised_vector = clowder.index.prepare_vector_for_insert(&vector)?;
 
         let wal_id = format!("{}:{}", name, id);
         if let Some(ref mut wal) = self.wal {
@@ -410,7 +374,7 @@ impl Engine {
 
     pub fn delete_vector(&mut self, name: &str, id: &str) -> Result<()> {
         let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
-        if clowder.index_type == INDEX_TYPE_HNSW {
+        if !clowder.index.is_support_delete() {
             return Err(Hairball::InternalError);
         }
         let exist = clowder.vectors.lock().unwrap().contains_key(id);
@@ -470,6 +434,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
 
+    use crate::index::factory::{INDEX_TYPE_BRUTE, INDEX_TYPE_HNSW};
     use crate::manifest::manager::ManifestManager;
     use crate::manifest::resource::Manifest;
     use crate::segment::resource::VectorMetadata;

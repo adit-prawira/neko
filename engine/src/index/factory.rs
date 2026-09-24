@@ -16,21 +16,23 @@ pub struct IndexFactory;
 
 impl IndexFactory {
     pub fn build(index_type: u8, dim: Option<u32>, metric: Option<u8>) -> Result<Arc<dyn Index>> {
+        let Some(metric) = metric else {
+            return Err(Hairball::InvalidMetric);
+        };
+
         if index_type == INDEX_TYPE_BRUTE {
-            return IndexFactory::build_brute_index();
+            return IndexFactory::build_brute_index(metric);
         };
 
         let Some(dim) = dim else {
             return Err(Hairball::DimMismatch);
         };
-        let Some(metric) = metric else {
-            return Err(Hairball::InvalidMetric);
-        };
+
         IndexFactory::build_hnsw_index(dim, metric)
     }
 
-    fn build_brute_index() -> Result<Arc<dyn Index>> {
-        Ok(Arc::new(BruteIndex))
+    fn build_brute_index(metric: u8) -> Result<Arc<dyn Index>> {
+        Ok(Arc::new(BruteIndex::new(metric)))
     }
 
     fn build_hnsw_index(dim: u32, metric: u8) -> Result<Arc<dyn Index>> {
@@ -47,20 +49,25 @@ impl IndexFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::resource::Index;
 
     #[test]
-    fn given_factory_build_with_index_type_brute_then_succeeds_without_dim_or_metric() {
+    fn given_factory_build_with_index_type_brute_and_missing_metric_then_returns_invalid_metric() {
         let result = IndexFactory::build(INDEX_TYPE_BRUTE, None, None);
-        assert!(result.is_ok());
-        let arc = result.unwrap();
-        arc.search(&std::collections::HashMap::new(), &[0.0], 0, 0, 1).unwrap();
+        assert!(matches!(result, Err(Hairball::InvalidMetric)));
     }
 
     #[test]
-    fn given_factory_build_with_index_type_brute_then_ignores_dim_and_metric() {
+    fn given_factory_build_with_index_type_brute_and_metric_none_then_returns_invalid_metric() {
         let result = IndexFactory::build(INDEX_TYPE_BRUTE, Some(0), None);
+        assert!(matches!(result, Err(Hairball::InvalidMetric)));
+    }
+
+    #[test]
+    fn given_factory_build_with_index_type_brute_and_valid_metric_then_succeeds() {
+        let result = IndexFactory::build(INDEX_TYPE_BRUTE, Some(0), Some(0));
         assert!(result.is_ok());
+        let arc = result.unwrap();
+        arc.search(&std::collections::HashMap::new(), &[0.0], 0, 0, 1).unwrap();
     }
 
     #[test]

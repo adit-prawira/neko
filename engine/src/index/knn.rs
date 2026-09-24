@@ -1,35 +1,10 @@
-use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
 use crate::segment::resource::Metric;
 use crate::shared;
 use crate::shared::hairball::Hairball;
 
-#[derive(Clone, Debug)]
-pub struct ScoredVector {
-    pub id: String,
-    pub score: f32,
-}
-
-impl PartialEq for ScoredVector {
-    fn eq(&self, other: &Self) -> bool {
-        self.score.total_cmp(&other.score) == Ordering::Equal
-    }
-}
-
-impl Eq for ScoredVector {}
-
-impl PartialOrd for ScoredVector {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ScoredVector {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.score.total_cmp(&other.score)
-    }
-}
+use super::resource::ScoredVector;
 
 #[derive(Clone, Debug)]
 pub struct KNNSearchParams<'a> {

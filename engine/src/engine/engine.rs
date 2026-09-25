@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-use crate::index::factory::{INDEX_TYPE_BRUTE, INDEX_TYPE_HNSW, IndexFactory};
+use crate::index::factory::IndexFactory;
 use crate::index::resource::{InputVector, ScoredVector};
 use crate::manifest::manager::ManifestManager;
 use crate::manifest::resource::Manifest;
@@ -62,6 +62,8 @@ impl Engine {
             return Ok(());
         }
         let entries = fs::read_dir(&collection_directory)?;
+        let wal_entries = Self::replay_wal_entries(&collection_directory)?;
+
         for entry in entries {
             let entry = entry?;
             let is_directory = entry.file_type()?.is_dir();
@@ -79,7 +81,9 @@ impl Engine {
                 continue;
             };
 
-            let Ok(index) = IndexFactory::build(manifest.index_type, Some(manifest.dim), Some(manifest.metric)) else {
+            let collection_wal_entries: Vec<&WalEntry> = wal_entries.iter().filter(|entry| entry.collection == name).collect();
+
+            let Ok(index) = IndexFactory::load_or_build(manifest.index_type, Some(manifest.dim), Some(manifest.metric), &entry.path(), &collection_wal_entries) else {
                 continue;
             };
 
@@ -97,7 +101,6 @@ impl Engine {
                 }),
             );
         }
-        let wal_entries = Self::replay_wal_entries(&collection_directory)?;
         for entry in &wal_entries {
             let Some(clowder) = clowders.get(&entry.collection) else {
                 continue;
@@ -117,8 +120,11 @@ impl Engine {
         }
 
         for clowder in clowders.values() {
-            let vectors = clowder.vectors.lock().unwrap();
-            clowder.index.rebuild_from(&vectors)?;
+            let entries: Vec<WalEntry> = wal_entries.iter().filter(|entry| entry.collection == clowder.name).cloned().collect();
+            if clowder.index.replay_wal(&entries).is_err() {
+                let vectors = clowder.vectors.lock().unwrap();
+                clowder.index.rebuild_from(&vectors)?;
+            }
         }
 
         let wal = WalWriter::open(&collection_directory, 64)
@@ -159,7 +165,7 @@ impl Engine {
         let manifest_path = collection_directory.join("manifest.json");
         ManifestManager::save_manifest(&manifest_path, &manifest)?;
 
-        let index = IndexFactory::build(payload.index_type, Some(payload.dim), Some(payload.metric))?;
+        let index = IndexFactory::load_or_build(payload.index_type, Some(payload.dim), Some(payload.metric), &collection_directory, &[])?;
         self.clowders.insert(
             payload.name.to_string(),
             Arc::new(Clowder {
@@ -233,7 +239,7 @@ impl Engine {
     }
 
     pub fn insert_vector(&mut self, name: &str, id: &str, vector: Vec<f32>, metadata: &VectorMetadata) -> Result<()> {
-        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        let clowder = self.clowders.get(name).cloned().ok_or(Hairball::NotFound)?;
         if vector.len() != clowder.dim as usize {
             return Err(Hairball::DimMismatch);
         }
@@ -241,9 +247,12 @@ impl Engine {
         let normalised_vector = clowder.index.prepare_vector_for_insert(&vector)?;
 
         let wal_id = format!("{}:{}", name, id);
-        if let Some(ref mut wal) = self.wal {
-            wal.append_insert(&wal_id, &normalised_vector, metadata)?;
-        }
+        let is_rotated = if let Some(ref mut wal) = self.wal {
+            wal.append_insert(&wal_id, &normalised_vector, metadata)?
+        } else {
+            false
+        };
+
         clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector.clone());
         let has_custom_metadata = !metadata.custom.is_empty();
         if has_custom_metadata {
@@ -252,12 +261,16 @@ impl Engine {
             clowder.metadata.lock().unwrap().remove(id);
         }
         clowder.index.insert(id, &normalised_vector)?;
+
+        if is_rotated {
+            self.checkpoint_index(&clowder, name)?;
+        }
         Ok(())
     }
 
     pub fn insert_many_vector(&mut self, name: &str, input_vectors: Vec<InputVectorDto>) -> Result<()> {
-        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
-        Engine::validate_vectors(clowder, &input_vectors)?;
+        let clowder = self.clowders.get(name).cloned().ok_or(Hairball::NotFound)?;
+        Engine::validate_vectors(&clowder, &input_vectors)?;
 
         let normalised_input_vectors: Vec<InputVectorDto> = input_vectors
             .into_iter()
@@ -274,9 +287,12 @@ impl Engine {
             })
             .collect();
 
+        let mut is_rotated = false;
         if let Some(ref mut wal) = self.wal {
             for normalised_input_vector in &normalised_input_vectors {
-                Engine::resolve_tail_log(wal, name, normalised_input_vector)?;
+                if Engine::resolve_tail_log(wal, name, normalised_input_vector)? {
+                    is_rotated = true
+                };
             }
         }
 
@@ -303,13 +319,17 @@ impl Engine {
             .collect();
 
         clowder.index.insert_batch(&items)?;
+
+        if is_rotated {
+            self.checkpoint_index(&clowder, name)?;
+        }
         Ok(())
     }
 
-    fn resolve_tail_log(wal: &mut WalWriter, name: &str, input_vector: &InputVectorDto) -> Result<()> {
+    fn resolve_tail_log(wal: &mut WalWriter, name: &str, input_vector: &InputVectorDto) -> Result<bool> {
         let wal_id = format!("{}:{}", name, input_vector.id);
-        wal.append_insert(&wal_id, &input_vector.vector, &input_vector.metadata)?;
-        Ok(())
+        let is_rotated = wal.append_insert(&wal_id, &input_vector.vector, &input_vector.metadata)?;
+        Ok(is_rotated)
     }
 
     fn resolve_vector_store(vector_store: &mut HashMap<String, Vec<f32>>, input_vector: &InputVectorDto) -> Result<()> {
@@ -337,7 +357,7 @@ impl Engine {
     }
 
     pub fn upsert_vector(&mut self, name: &str, id: &str, vector: Vec<f32>, metadata: &VectorMetadata) -> Result<()> {
-        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        let clowder = self.clowders.get(name).cloned().ok_or(Hairball::NotFound)?;
         if vector.len() != clowder.dim as usize {
             return Err(Hairball::DimMismatch);
         }
@@ -351,10 +371,15 @@ impl Engine {
         let normalised_vector = clowder.index.prepare_vector_for_insert(&vector)?;
 
         let wal_id = format!("{}:{}", name, id);
-        if let Some(ref mut wal) = self.wal {
-            wal.append_delete(&wal_id)?;
-            wal.append_insert(&wal_id, &normalised_vector, metadata)?;
-        }
+        let is_rotated = if let Some(ref mut wal) = self.wal {
+            let delete_rotated = wal.append_delete(&wal_id)?;
+            let insert_rotated = wal.append_insert(&wal_id, &normalised_vector, metadata)?;
+
+            delete_rotated || insert_rotated
+        } else {
+            false
+        };
+
         clowder.vectors.lock().unwrap().insert(id.to_string(), normalised_vector.clone());
         let has_custom_metadata = !metadata.custom.is_empty();
         if has_custom_metadata {
@@ -363,6 +388,10 @@ impl Engine {
             clowder.metadata.lock().unwrap().remove(id);
         }
         clowder.index.insert(id, &normalised_vector)?;
+
+        if is_rotated {
+            self.checkpoint_index(&clowder, name)?;
+        }
         Ok(())
     }
 
@@ -373,7 +402,7 @@ impl Engine {
     }
 
     pub fn delete_vector(&mut self, name: &str, id: &str) -> Result<()> {
-        let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        let clowder = self.clowders.get(name).cloned().ok_or(Hairball::NotFound)?;
         if !clowder.index.is_support_delete() {
             return Err(Hairball::InternalError);
         }
@@ -384,11 +413,14 @@ impl Engine {
         }
 
         let wal_id = format!("{}:{}", name, id);
-        if let Some(ref mut wal) = self.wal {
-            wal.append_delete(&wal_id)?;
-        }
+        let is_rotated = if let Some(ref mut wal) = self.wal { wal.append_delete(&wal_id)? } else { false };
+
         clowder.vectors.lock().unwrap().remove(id);
         clowder.metadata.lock().unwrap().remove(id);
+
+        if is_rotated {
+            self.checkpoint_index(&clowder, name)?;
+        }
         Ok(())
     }
 
@@ -427,6 +459,17 @@ impl Engine {
         let vectors = clowder.vectors.lock().unwrap();
         clowder.index.search(&vectors, query, top_k, clowder.metric, clowder.dim)
     }
+
+    fn checkpoint_index(&mut self, clowder: &Arc<Clowder>, name: &str) -> Result<()> {
+        let dump_dir = self.data_directory.join("collections").join(name).join("graph_dump");
+        std::fs::create_dir_all(&dump_dir)?;
+        clowder.index.serialise(&dump_dir)?;
+        if let Some(ref mut wal) = self.wal {
+            wal.compact()?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -449,6 +492,13 @@ mod tests {
             data_directory: data_dir,
             wal: None,
         }
+    }
+
+    fn new_engine_with_wal(temp_dir: &std::path::Path, rotate_mb: u64) -> Engine {
+        let mut engine = new_engine(temp_dir);
+        let collection_dir = temp_dir.join("collections");
+        engine.wal = WalWriter::open(&collection_dir, rotate_mb).ok();
+        engine
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -1621,5 +1671,32 @@ mod tests {
         let results = engine.search("pts", &[0.0, 0.0], 1).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "near");
+    }
+
+    #[test]
+    fn given_hnsw_insert_triggers_rotation_then_graph_dump_is_created() {
+        let dir = temp_dir("engine_checkpoint_on_rotate");
+        let mut engine = new_engine_with_wal(&dir, 0);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                index_type: INDEX_TYPE_HNSW,
+            })
+            .unwrap();
+
+        let metadata = VectorMetadata {
+            id: String::new(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+        engine.insert_vector("pts", "near", vec![1.0, 0.0], &metadata).unwrap();
+
+        let dump_dir = dir.join("collections").join("pts").join("graph_dump");
+        assert!(dump_dir.join("graph.hnsw.graph").exists(), "rotation should trigger graph dump");
+        assert!(dump_dir.join("graph.ids").exists(), "rotation should trigger ids dump");
     }
 }

@@ -1,11 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Mutex;
 
+use hnsw_rs::api::AnnT;
 use hnsw_rs::hnsw::{Hnsw, Neighbour};
+use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::Distance;
+use serde::{Deserialize, Serialize};
 
 use crate::shared::hairball::Hairball;
 use crate::shared::results::Result;
+use crate::wal::resource::{OperationCode, WalEntry};
 
 use super::resource::{Index, InputVector, ScoredVector};
 
@@ -15,6 +20,13 @@ pub const DEFAULT_NB_LAYER: usize = 16;
 
 const INITIAL_BACKLOG: usize = 10_000;
 const SEARCH_BEAM_FACTOR: usize = 4;
+
+const DUMP_BASENAME: &str = "graph";
+
+#[derive(Serialize, Deserialize)]
+struct IdsMapping {
+    node_to_external: Vec<String>,
+}
 
 // Bridges neko's String ids and hnsw_rs's required usize node identifiers.
 // `assign` runs on insert; `translate` runs on search.
@@ -60,12 +72,92 @@ where
             dim,
         })
     }
+
+    pub fn from_dump(directory: &Path, dim: usize, distance: D) -> Result<Self> {
+        let box_loader = Box::new(HnswIo::new(directory, DUMP_BASENAME));
+        let loader: &'static HnswIo = Box::leak(box_loader);
+        let mut graph = loader.load_hnsw_with_dist(distance).map_err(|_| Hairball::CorruptedSegment)?;
+        graph.set_searching_mode(true);
+
+        let ids_bytes = std::fs::read(directory.join(format!("{}.ids", DUMP_BASENAME))).map_err(|_| Hairball::CorruptedSegment)?;
+        let mapping: IdsMapping = serde_json::from_slice(&ids_bytes).map_err(|_| Hairball::CorruptedSegment)?;
+
+        let mut external_to_node = HashMap::with_capacity(mapping.node_to_external.len());
+        let node_to_external = mapping.node_to_external;
+        for (node, external) in node_to_external.iter().enumerate() {
+            external_to_node.insert(external.to_string(), node);
+        }
+
+        Ok(Self {
+            graph: Mutex::new(graph),
+            ids: Mutex::new(NodeIdRegistry {
+                external_to_node,
+                node_to_external,
+            }),
+            dim,
+        })
+    }
 }
 
 impl<D> Index for HnswIndex<D>
 where
     D: Distance<f32> + Send + Sync + 'static,
 {
+    fn serialise(&self, directory: &Path) -> Result<()> {
+        let graph = self.graph.lock().unwrap();
+        let ids = self.ids.lock().unwrap();
+
+        let temp_directory = directory.with_extension("tmp");
+        let old_directory = directory.with_extension("old");
+        std::fs::create_dir_all(&temp_directory)?;
+
+        graph.file_dump(&temp_directory, DUMP_BASENAME).map_err(|_| Hairball::InternalError)?;
+
+        let mapping = IdsMapping {
+            node_to_external: ids.node_to_external.clone(),
+        };
+
+        let mapping_bytes = serde_json::to_vec(&mapping).map_err(|_| Hairball::InternalError)?;
+
+        let write_path = temp_directory.join(format!("{}.ids", DUMP_BASENAME));
+
+        std::fs::write(write_path, mapping_bytes).map_err(|_| Hairball::InternalError)?;
+
+        if directory.exists() {
+            let _ = std::fs::remove_dir_all(&old_directory);
+            std::fs::rename(directory, &old_directory).map_err(|_| Hairball::InternalError)?;
+        }
+
+        std::fs::rename(&temp_directory, directory).map_err(|_| Hairball::InternalError)?;
+        let _ = std::fs::remove_dir_all(&old_directory);
+        Ok(())
+    }
+
+    fn replay_wal(&self, entries: &[WalEntry]) -> Result<()> {
+        let has_delete = entries.iter().any(|entry| matches!(entry.operation_code, OperationCode::Delete));
+        if has_delete {
+            return Err(Hairball::InternalError);
+        }
+
+        let existing_ids = {
+            let ids = self.ids.lock().unwrap();
+            ids.external_to_node.keys().cloned().collect::<HashSet<_>>()
+        };
+
+        for entry in entries {
+            if existing_ids.contains(&entry.id) {
+                continue;
+            }
+
+            if entry.vector.len() != self.dim {
+                return Err(Hairball::InternalError);
+            }
+            self.insert(&entry.id, &entry.vector)?;
+        }
+
+        Ok(())
+    }
+
     fn search(&self, _vectors: &HashMap<String, Vec<f32>>, query: &[f32], top_k: usize, _metric: u8, _dim: u32) -> Result<Vec<ScoredVector>> {
         if query.len() != self.dim {
             return Err(Hairball::DimMismatch);
@@ -152,10 +244,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::segment::resource::VectorMetadata;
     use hnsw_rs::prelude::DistL2;
 
     fn build_l2_index(dim: usize) -> HnswIndex<DistL2> {
         HnswIndex::<DistL2>::new(dim, DistL2).expect("hnsw construction never fails")
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("neko_test_{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn wal_entry(operation_code: OperationCode, id: &str, vector: Vec<f32>) -> WalEntry {
+        WalEntry {
+            operation_code,
+            collection: "col".to_string(),
+            id: id.to_string(),
+            vector,
+            metadata: VectorMetadata {
+                id: id.to_string(),
+                created_at: 0,
+                deleted: false,
+                custom: String::new(),
+            },
+        }
     }
 
     fn to_input_vector(id: &str, vector: &[f32]) -> InputVector {
@@ -408,5 +522,79 @@ mod tests {
         let results = index.search(&HashMap::new(), &[1.0, 0.0], 1, 0, 2).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "near");
+    }
+
+    #[test]
+    fn given_hnsw_index_with_vectors_then_serialise_writes_graph_and_ids_files() {
+        let temp_dir = temp_dir("hnsw_serialise_writes_files");
+        let index = build_l2_index(2);
+        index.insert("doc1", &[1.0, 0.0]).unwrap();
+
+        let dump_dir = temp_dir.join("graph_dump");
+        index.serialise(&dump_dir).unwrap();
+
+        assert!(dump_dir.join("graph.hnsw.graph").exists());
+        assert!(dump_dir.join("graph.ids").exists());
+    }
+
+    #[test]
+    fn given_serialised_hnsw_index_then_from_dump_restores_search_results() {
+        let temp_dir = temp_dir("hnsw_from_dump_roundtrip");
+        let original_index = build_l2_index(2);
+        original_index.insert("near", &[1.0, 0.0]).unwrap();
+        original_index.insert("far", &[9.0, 0.0]).unwrap();
+
+        let dump_dir = temp_dir.join("graph_dump");
+        original_index.serialise(&dump_dir).unwrap();
+
+        let restored_index = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2).unwrap();
+        let results = restored_index.search(&HashMap::new(), &[1.0, 0.0], 1, 0, 2).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "near");
+    }
+
+    #[test]
+    fn given_hnsw_index_then_replay_wal_inserts_entries() {
+        let index = build_l2_index(2);
+        let entries = vec![wal_entry(OperationCode::Insert, "doc1", vec![1.0, 0.0])];
+
+        index.replay_wal(&entries).unwrap();
+        let results = index.search(&HashMap::new(), &[1.0, 0.0], 1, 0, 2).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "doc1");
+    }
+
+    #[test]
+    fn given_hnsw_index_then_replay_wal_with_delete_returns_error() {
+        let index = build_l2_index(2);
+        let entries = vec![wal_entry(OperationCode::Delete, "doc1", vec![])];
+
+        let result = index.replay_wal(&entries);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn given_hnsw_index_then_replay_wal_with_wrong_dim_returns_error() {
+        let index = build_l2_index(2);
+        let entries = vec![wal_entry(OperationCode::Insert, "doc1", vec![1.0, 0.0, 0.0])];
+
+        let result = index.replay_wal(&entries);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn given_hnsw_index_with_existing_id_then_replay_wal_skips_duplicate_insert() {
+        let index = build_l2_index(2);
+        index.insert("doc1", &[1.0, 0.0]).unwrap();
+        let entries = vec![wal_entry(OperationCode::Insert, "doc1", vec![1.0, 0.0])];
+
+        index.replay_wal(&entries).unwrap();
+        let results = index.search(&HashMap::new(), &[1.0, 0.0], 10, 0, 2).unwrap();
+
+        assert_eq!(results.len(), 1);
     }
 }

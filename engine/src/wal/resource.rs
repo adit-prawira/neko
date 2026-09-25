@@ -19,6 +19,7 @@ impl OperationCode {
     }
 }
 
+#[derive(Clone)]
 pub struct WalEntry {
     pub operation_code: OperationCode,
     pub collection: String,

@@ -1,7 +1,10 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::path::Path;
 
+use crate::shared::hairball::Hairball;
 use crate::shared::results::Result;
+use crate::wal::resource::WalEntry;
 
 #[derive(Clone, Debug)]
 pub struct ScoredVector {
@@ -43,4 +46,10 @@ pub trait Index: Send + Sync {
     fn is_support_delete(&self) -> bool;
     fn is_support_upsert(&self) -> bool;
     fn rebuild_from(&self, vectors: &HashMap<String, Vec<f32>>) -> Result<()>;
+    fn serialise(&self, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+    fn replay_wal(&self, _entries: &[WalEntry]) -> Result<()> {
+        Err(Hairball::InternalError)
+    }
 }

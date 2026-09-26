@@ -6,6 +6,7 @@ use hnsw_rs::api::AnnT;
 use hnsw_rs::hnsw::{Hnsw, Neighbour};
 use hnsw_rs::hnswio::HnswIo;
 use hnsw_rs::prelude::Distance;
+use ouroboros::self_referencing;
 use serde::{Deserialize, Serialize};
 
 use crate::shared::hairball::Hairball;
@@ -22,6 +23,41 @@ const INITIAL_BACKLOG: usize = 10_000;
 const SEARCH_BEAM_FACTOR: usize = 4;
 
 const DUMP_BASENAME: &str = "graph";
+
+#[self_referencing]
+struct LoadedHnsw<D>
+where
+    D: Distance<f32> + Send + Sync + 'static,
+{
+    loader: Box<HnswIo>,
+
+    #[borrows(loader)]
+    #[not_covariant]
+    graph: Hnsw<'this, f32, D>,
+}
+
+enum GraphStorage<D>
+where
+    D: Distance<f32> + Send + Sync + 'static,
+{
+    Owned(Hnsw<'static, f32, D>),
+    Loaded(LoadedHnsw<D>),
+}
+
+impl<D> GraphStorage<D>
+where
+    D: Distance<f32> + Send + Sync + 'static,
+{
+    fn with_graph<F, R>(&self, func: F) -> R
+    where
+        F: FnOnce(&Hnsw<'_, f32, D>) -> R,
+    {
+        match self {
+            GraphStorage::Owned(graph) => func(graph),
+            GraphStorage::Loaded(loaded) => loaded.with_graph(func),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct IdsMapping {
@@ -54,7 +90,7 @@ pub struct HnswIndex<D>
 where
     D: Distance<f32> + Send + Sync + 'static,
 {
-    graph: Mutex<Hnsw<'static, f32, D>>,
+    graph_storage: Mutex<GraphStorage<D>>,
     ids: Mutex<NodeIdRegistry>,
     dim: usize,
 }
@@ -67,17 +103,20 @@ where
         let mut graph = Hnsw::new(DEFAULT_MAX_NB_CONNECTION, INITIAL_BACKLOG, DEFAULT_NB_LAYER, DEFAULT_EF_CONSTRUCTION, distance);
         graph.set_searching_mode(true);
         Ok(Self {
-            graph: Mutex::new(graph),
+            graph_storage: Mutex::new(GraphStorage::Owned(graph)),
             ids: Mutex::new(NodeIdRegistry::default()),
             dim,
         })
     }
 
     pub fn from_dump(directory: &Path, dim: usize, distance: D) -> Result<Self> {
-        let box_loader = Box::new(HnswIo::new(directory, DUMP_BASENAME));
-        let loader: &'static HnswIo = Box::leak(box_loader);
-        let mut graph = loader.load_hnsw_with_dist(distance).map_err(|_| Hairball::CorruptedSegment)?;
-        graph.set_searching_mode(true);
+        let loader = Box::new(HnswIo::new(directory, DUMP_BASENAME));
+        let loaded = LoadedHnsw::try_new(loader, |loader: &Box<HnswIo>| -> Result<Hnsw<'_, f32, D>> {
+            let mut graph = loader.load_hnsw_with_dist(distance).map_err(|_| Hairball::CorruptedSegment)?;
+            graph.set_searching_mode(true);
+            Ok(graph)
+        })
+        .map_err(|_| Hairball::CorruptedSegment)?;
 
         let ids_bytes = std::fs::read(directory.join(format!("{}.ids", DUMP_BASENAME))).map_err(|_| Hairball::CorruptedSegment)?;
         let mapping: IdsMapping = serde_json::from_slice(&ids_bytes).map_err(|_| Hairball::CorruptedSegment)?;
@@ -89,7 +128,7 @@ where
         }
 
         Ok(Self {
-            graph: Mutex::new(graph),
+            graph_storage: Mutex::new(GraphStorage::Loaded(loaded)),
             ids: Mutex::new(NodeIdRegistry {
                 external_to_node,
                 node_to_external,
@@ -104,14 +143,14 @@ where
     D: Distance<f32> + Send + Sync + 'static,
 {
     fn serialise(&self, directory: &Path) -> Result<()> {
-        let graph = self.graph.lock().unwrap();
+        let graph_storage = self.graph_storage.lock().unwrap();
         let ids = self.ids.lock().unwrap();
 
         let temp_directory = directory.with_extension("tmp");
         let old_directory = directory.with_extension("old");
         std::fs::create_dir_all(&temp_directory)?;
 
-        graph.file_dump(&temp_directory, DUMP_BASENAME).map_err(|_| Hairball::InternalError)?;
+        graph_storage.with_graph(|graph| graph.file_dump(&temp_directory, DUMP_BASENAME).map_err(|_| Hairball::InternalError))?;
 
         let mapping = IdsMapping {
             node_to_external: ids.node_to_external.clone(),
@@ -169,8 +208,8 @@ where
 
         let search_beam = top_k.max(DEFAULT_MAX_NB_CONNECTION) * SEARCH_BEAM_FACTOR;
         let raw_neighbours: Vec<Neighbour> = {
-            let graph = self.graph.lock().unwrap();
-            graph.search(query, top_k, search_beam)
+            let graph_storage = self.graph_storage.lock().unwrap();
+            graph_storage.with_graph(|graph| graph.search(query, top_k, search_beam))
         };
 
         let ids = self.ids.lock().unwrap();
@@ -193,8 +232,8 @@ where
         }
 
         let assigned = self.ids.lock().unwrap().assign(id);
-        let graph = self.graph.lock().unwrap();
-        graph.insert((vector, assigned));
+        let graph_storage = self.graph_storage.lock().unwrap();
+        graph_storage.with_graph(|graph| graph.insert((vector, assigned)));
         Ok(())
     }
 
@@ -209,9 +248,9 @@ where
             items.iter().map(|item| (ids.assign(item.id.as_str()), item.vector.to_vec())).collect()
         };
 
-        let graph = self.graph.lock().unwrap();
+        let graph_storage = self.graph_storage.lock().unwrap();
         for (internal_id, vector) in &owned {
-            graph.insert((vector.as_slice(), *internal_id));
+            graph_storage.with_graph(|graph| graph.insert((vector.as_slice(), *internal_id)));
         }
         Ok(())
     }
@@ -596,5 +635,54 @@ mod tests {
         let results = index.search(&HashMap::new(), &[1.0, 0.0], 10, 0, 2).unwrap();
 
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn given_loaded_hnsw_index_then_insert_makes_new_vector_searchable() {
+        let temp_dir = temp_dir("hnsw_loaded_insert");
+        let original_index = build_l2_index(2);
+        original_index.insert("existing", &[1.0, 0.0]).unwrap();
+
+        let dump_dir = temp_dir.join("graph_dump");
+        original_index.serialise(&dump_dir).unwrap();
+
+        let loaded_index = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2).unwrap();
+        loaded_index.insert("new", &[0.0, 1.0]).unwrap();
+
+        let results = loaded_index.search(&HashMap::new(), &[0.0, 1.0], 2, 0, 2).unwrap();
+        assert_eq!(results.len(), 2);
+        let returned_ids: Vec<&str> = results.iter().map(|result| result.id.as_str()).collect();
+        assert!(returned_ids.contains(&"existing"));
+        assert!(returned_ids.contains(&"new"));
+    }
+
+    #[test]
+    fn given_missing_graph_file_then_from_dump_returns_corrupted_segment() {
+        let temp_dir = temp_dir("hnsw_missing_graph");
+        let index = build_l2_index(2);
+        index.insert("doc1", &[1.0, 0.0]).unwrap();
+
+        let dump_dir = temp_dir.join("graph_dump");
+        index.serialise(&dump_dir).unwrap();
+        std::fs::remove_file(dump_dir.join("graph.hnsw.graph")).unwrap();
+
+        let result = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2);
+
+        assert!(matches!(result, Err(Hairball::CorruptedSegment)));
+    }
+
+    #[test]
+    fn given_missing_ids_file_then_from_dump_returns_corrupted_segment() {
+        let temp_dir = temp_dir("hnsw_missing_ids");
+        let index = build_l2_index(2);
+        index.insert("doc1", &[1.0, 0.0]).unwrap();
+
+        let dump_dir = temp_dir.join("graph_dump");
+        index.serialise(&dump_dir).unwrap();
+        std::fs::remove_file(dump_dir.join("graph.ids")).unwrap();
+
+        let result = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2);
+
+        assert!(matches!(result, Err(Hairball::CorruptedSegment)));
     }
 }

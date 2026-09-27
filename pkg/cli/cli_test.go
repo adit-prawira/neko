@@ -84,6 +84,97 @@ func TestCreateCommandWithHnswFlag(t *testing.T) {
 	ffi.Drop("test_create_hnsw")
 }
 
+func TestCreateCommandWithHnswMaxConnectionsAndEfConstruction(t *testing.T) {
+	cliSetup(t)
+	defer func() { ffi.Drop("test_create_hnsw_tuning") }()
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+
+	cmd.SetArgs([]string{
+		"create", "test_create_hnsw_tuning",
+		"--dim", "8",
+		"--metric", "l2",
+		"--index", "hnsw",
+		"--max-connections", "32",
+		"--ef-construction", "400",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("create with --max-connections and --ef-construction failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "max_connections=32") {
+		t.Errorf("expected max_connections=32 in output, got %q", output)
+	}
+	if !strings.Contains(output, "ef_construction=400") {
+		t.Errorf("expected ef_construction=400 in output, got %q", output)
+	}
+}
+
+func TestCreateCommandWithBruteAndHnswFlagsRejects(t *testing.T) {
+	cliSetup(t)
+	defer func() { ffi.Drop("test_create_brute_with_hnsw_flag") }()
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+
+	cmd.SetArgs([]string{
+		"create", "test_create_brute_with_hnsw_flag",
+		"--dim", "8",
+		"--metric", "l2",
+		"--index", "brute",
+		"--max-connections", "32",
+	})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected error for --index brute with --max-connections, got nil")
+	}
+	if !strings.Contains(err.Error(), "--max-connections") {
+		t.Errorf("expected error to mention --max-connections, got: %v", err)
+	}
+}
+
+func TestSearchCommandWithEfSearchFlag(t *testing.T) {
+	cliSetup(t)
+	defer func() { ffi.Drop("test_search_with_ef_search") }()
+
+	if err := ffi.Create("test_search_with_ef_search", 3, ffi.MetricL2, ""); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if err := ffi.Insert("test_search_with_ef_search", "near", []float32{2.0, 0.0, 0.0}, ""); err != nil {
+		t.Fatalf("insert near failed: %v", err)
+	}
+	if err := ffi.Insert("test_search_with_ef_search", "far", []float32{10.0, 0.0, 0.0}, ""); err != nil {
+		t.Fatalf("insert far failed: %v", err)
+	}
+
+	dir := t.TempDir()
+	queryFile := filepath.Join(dir, "query.f32")
+	writeRawF32(queryFile, []float32{1.0, 0.0, 0.0})
+
+	cmd := NewRootCommand()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetArgs([]string{
+		"search", "test_search_with_ef_search",
+		"--file", queryFile,
+		"--k", "2",
+		"--ef-search", "50",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("search with --ef-search failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "near") {
+		t.Errorf("expected near in output, got %q", output)
+	}
+}
+
 func TestCreateCommandInvalidIndexFlag(t *testing.T) {
 	cliSetup(t)
 
@@ -168,7 +259,7 @@ func TestListCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("test_list_cli")
-	if err := ffi.Create("test_list_cli", 256, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("test_list_cli", 256, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -192,7 +283,7 @@ func TestDropCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("test_drop_cli")
-	if err := ffi.Create("test_drop_cli", 128, ffi.MetricDot, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("test_drop_cli", 128, ffi.MetricDot, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -252,7 +343,7 @@ func TestInsertCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("cli_test_insert_tc")
-	if err := ffi.Create("cli_test_insert_tc", 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("cli_test_insert_tc", 3, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -292,7 +383,7 @@ func TestUpsertCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("cli_test_upsert_tc")
-	if err := ffi.Create("cli_test_upsert_tc", 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("cli_test_upsert_tc", 3, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -332,7 +423,7 @@ func TestGetCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("cli_test_get_tc")
-	if err := ffi.Create("cli_test_get_tc", 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("cli_test_get_tc", 3, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -359,7 +450,7 @@ func TestGetCommandNonexistentId(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("cli_test_getnf_tc")
-	if err := ffi.Create("cli_test_getnf_tc", 3, ffi.MetricCosine, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("cli_test_getnf_tc", 3, ffi.MetricCosine, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -376,7 +467,7 @@ func TestSearchCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("cli_test_search")
-	if err := ffi.Create("cli_test_search", 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("cli_test_search", 3, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -420,7 +511,7 @@ func TestDeleteCommand(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("test_delete_cli")
-	if err := ffi.Create("test_delete_cli", 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("test_delete_cli", 3, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 	if err := ffi.Insert("test_delete_cli", "doc1", []float32{1.0, 2.0, 3.0}, ""); err != nil {
@@ -447,7 +538,7 @@ func TestDeleteCommandNonexistentId(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	ffi.Drop("test_delete_nf_cli")
-	if err := ffi.Create("test_delete_nf_cli", 3, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("test_delete_nf_cli", 3, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
@@ -648,10 +739,10 @@ func TestStatsCommandWithCollections(t *testing.T) {
 	defer os.RemoveAll(dir)
 	resetEngineState(t)
 
-	if err := ffi.Create("stats_test_docs", 384, ffi.MetricCosine, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("stats_test_docs", 384, ffi.MetricCosine, ""); err != nil {
 		t.Fatalf("create docs failed: %v", err)
 	}
-	if err := ffi.Create("stats_test_images", 768, ffi.MetricL2, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("stats_test_images", 768, ffi.MetricL2, ""); err != nil {
 		t.Fatalf("create images failed: %v", err)
 	}
 
@@ -689,7 +780,7 @@ func TestStatsCommandJSON(t *testing.T) {
 	defer os.RemoveAll(dir)
 	resetEngineState(t)
 
-	if err := ffi.Create("stats_test_json", 128, ffi.MetricDot, "", ffi.IndexTypeBrute); err != nil {
+	if err := ffi.Create("stats_test_json", 128, ffi.MetricDot, ""); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 

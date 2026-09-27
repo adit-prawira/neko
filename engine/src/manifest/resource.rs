@@ -13,4 +13,13 @@ pub struct Manifest {
 
     #[serde(default)]
     pub index_type: u8,
+
+    #[serde(default)]
+    pub hnsw_max_connections: u16,
+
+    #[serde(default)]
+    pub hnsw_ef_construction: u16,
+
+    #[serde(default)]
+    pub hnsw_ef_search: u16,
 }

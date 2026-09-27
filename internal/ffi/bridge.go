@@ -111,7 +111,7 @@ func ShutDown() error {
 	return nil
 }
 
-func Create(name string, dim uint32, metric uint8, model string, indexType uint8) error {
+func Create(name string, dim uint32, metric uint8, model string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	var cModel *C.char
@@ -120,10 +120,39 @@ func Create(name string, dim uint32, metric uint8, model string, indexType uint8
 		defer C.free(unsafe.Pointer(cModel))
 	}
 
-	code := C.neko_create(cName, C.uint32_t(dim), C.uint8_t(metric), cModel, C.uint8_t(indexType))
+	code := C.neko_create(cName, C.uint32_t(dim), C.uint8_t(metric), cModel)
 	if code != 0 {
 		return newHairballError("neko_create", int(code))
 	}
+	return nil
+}
+
+func CreateWithHnsw(name string, dim uint32, metric uint8, model string, maxConnections uint32, efConstruction uint32) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	var cModel *C.char
+	if model != "" {
+		cModel = C.CString(model)
+		defer C.free(unsafe.Pointer(cModel))
+	}
+
+	code := C.neko_create_with_hnsw(cName, C.uint32_t(dim), C.uint8_t(metric), cModel, C.uint32_t(maxConnections), C.uint32_t(efConstruction))
+	if code != 0 {
+		return newHairballError("neko_create_with_hnsw", int(code))
+	}
+
+	return nil
+}
+
+func SetSearchEf(name string, efSearch uint32) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	code := C.neko_set_search_ef(cName, C.uint32_t(efSearch))
+	if code != 0 {
+		return newHairballError("neko_set_search_ef", int(code))
+	}
+
 	return nil
 }
 

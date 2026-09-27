@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::index::factory::IndexFactory;
-use crate::index::resource::{InputVector, ScoredVector};
+use crate::index::resource::{IndexSpec, InputVector, ScoredVector};
 use crate::manifest::manager::ManifestManager;
 use crate::manifest::resource::Manifest;
 use crate::segment::resource::VectorMetadata;
@@ -30,7 +30,7 @@ pub struct CreateClowderDto<'a> {
     pub dim: u32,
     pub metric: u8,
     pub model: Option<&'a str>,
-    pub index_type: u8,
+    pub spec: IndexSpec,
 }
 
 pub struct InputVectorDto {
@@ -83,7 +83,8 @@ impl Engine {
 
             let collection_wal_entries: Vec<&WalEntry> = wal_entries.iter().filter(|entry| entry.collection == name).collect();
 
-            let Ok(index) = IndexFactory::load_or_build(manifest.index_type, Some(manifest.dim), Some(manifest.metric), &entry.path(), &collection_wal_entries) else {
+            let spec = IndexSpec::from_manifest(manifest.index_type, manifest.hnsw_max_connections, manifest.hnsw_ef_construction, manifest.hnsw_ef_search);
+            let Ok(index) = IndexFactory::load_or_build(spec, Some(manifest.dim), Some(manifest.metric), &entry.path(), &collection_wal_entries) else {
                 continue;
             };
 
@@ -98,6 +99,7 @@ impl Engine {
                     index,
                     vectors: Mutex::new(HashMap::new()),
                     metadata: Mutex::new(HashMap::new()),
+                    spec,
                 }),
             );
         }
@@ -144,7 +146,7 @@ impl Engine {
         EngineValidator::collection_name(payload.name)?;
         EngineValidator::dim(payload.dim)?;
         EngineValidator::metric(payload.metric)?;
-        EngineValidator::index_type(payload.index_type)?;
+        payload.spec.validate()?;
 
         if self.clowders.contains_key(payload.name) {
             return Err(Hairball::AlreadyExists);
@@ -160,12 +162,24 @@ impl Engine {
             metric: payload.metric,
             model: payload.model.map(|model| model.to_string()),
             segments: Vec::new(),
-            index_type: payload.index_type,
+            index_type: payload.spec.index_type(),
+            hnsw_max_connections: match &payload.spec {
+                IndexSpec::Brute => 0,
+                IndexSpec::Hnsw { max_connections, .. } => *max_connections as u16,
+            },
+            hnsw_ef_construction: match &payload.spec {
+                IndexSpec::Brute => 0,
+                IndexSpec::Hnsw { ef_construction, .. } => *ef_construction as u16,
+            },
+            hnsw_ef_search: match &payload.spec {
+                IndexSpec::Brute => 0,
+                IndexSpec::Hnsw { ef_search, .. } => *ef_search as u16,
+            },
         };
         let manifest_path = collection_directory.join("manifest.json");
         ManifestManager::save_manifest(&manifest_path, &manifest)?;
 
-        let index = IndexFactory::load_or_build(payload.index_type, Some(payload.dim), Some(payload.metric), &collection_directory, &[])?;
+        let index = IndexFactory::load_or_build(payload.spec, Some(payload.dim), Some(payload.metric), &collection_directory, &[])?;
         self.clowders.insert(
             payload.name.to_string(),
             Arc::new(Clowder {
@@ -173,10 +187,11 @@ impl Engine {
                 dim: payload.dim,
                 metric: payload.metric,
                 model: payload.model.map(|model| model.to_string()),
-                index_type: payload.index_type,
+                index_type: payload.spec.index_type(),
                 index,
                 vectors: Mutex::new(HashMap::new()),
                 metadata: Mutex::new(HashMap::new()),
+                spec: payload.spec,
             }),
         );
         Ok(())
@@ -200,6 +215,35 @@ impl Engine {
         }
 
         self.clowders.remove(name);
+        Ok(())
+    }
+
+    pub fn set_search_ef(&mut self, name: &str, ef_search: usize) -> Result<()> {
+        if ef_search == 0 {
+            return Err(Hairball::InvalidMetric);
+        }
+
+        let clowder_arc = self.clowders.get_mut(name).ok_or(Hairball::NotFound)?;
+        let clowder: &mut Clowder = Arc::get_mut(clowder_arc).ok_or(Hairball::InternalError)?;
+        match &mut clowder.spec {
+            IndexSpec::Brute => {
+                // ef_search has no effect on brute collections; succeed as a no-op
+                // so the CLI's `search --ef-search` flag works uniformly without a stats round-trip.
+            }
+            IndexSpec::Hnsw { ef_search: target, .. } => {
+                *target = ef_search;
+            }
+        }
+
+        // Persist the new ef_search to the manifest so the override survives restart.
+        // Skip for brute — ef_search has no effect there.
+        if let IndexSpec::Hnsw { ef_search, .. } = &clowder.spec {
+            let manifest_path = self.data_directory.join("collections").join(name).join("manifest.json");
+            let mut manifest = ManifestManager::load_manifest(&manifest_path)?;
+            manifest.hnsw_ef_search = *ef_search as u16;
+            ManifestManager::save_manifest(&manifest_path, &manifest)?;
+        }
+
         Ok(())
     }
 
@@ -477,7 +521,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
 
-    use crate::index::factory::{INDEX_TYPE_BRUTE, INDEX_TYPE_HNSW};
+    use crate::index::resource::{DEFAULT_EF_CONSTRUCTION, DEFAULT_EF_SEARCH, DEFAULT_MAX_CONNECTIONS, IndexSpec};
     use crate::manifest::manager::ManifestManager;
     use crate::manifest::resource::Manifest;
     use crate::segment::resource::VectorMetadata;
@@ -518,7 +562,7 @@ mod tests {
                 dim: 384,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -545,7 +589,7 @@ mod tests {
                 dim: 128,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
         engine
@@ -554,7 +598,7 @@ mod tests {
                 dim: 256,
                 metric: 2,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -573,7 +617,7 @@ mod tests {
                 dim: 384,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
         let result = engine.create_clowder(CreateClowderDto {
@@ -581,7 +625,7 @@ mod tests {
             dim: 512,
             metric: 0,
             model: None,
-            index_type: 0,
+            spec: IndexSpec::Brute,
         });
 
         assert_eq!(result.unwrap_err(), Hairball::AlreadyExists);
@@ -598,7 +642,7 @@ mod tests {
             dim: 128,
             metric: 0,
             model: None,
-            index_type: 0,
+            spec: IndexSpec::Brute,
         });
         assert_eq!(result.unwrap_err(), Hairball::InvalidName);
 
@@ -607,7 +651,7 @@ mod tests {
             dim: 128,
             metric: 0,
             model: None,
-            index_type: 0,
+            spec: IndexSpec::Brute,
         });
         assert_eq!(result.unwrap_err(), Hairball::InvalidName);
     }
@@ -622,7 +666,7 @@ mod tests {
             dim: 4097,
             metric: 0,
             model: None,
-            index_type: 0,
+            spec: IndexSpec::Brute,
         });
         assert_eq!(result.unwrap_err(), Hairball::DimTooLarge);
         assert!(engine.clowders.is_empty());
@@ -638,7 +682,7 @@ mod tests {
             dim: 0,
             metric: 0,
             model: None,
-            index_type: 0,
+            spec: IndexSpec::Brute,
         });
         assert_eq!(result.unwrap_err(), Hairball::DimTooSmall);
     }
@@ -653,7 +697,7 @@ mod tests {
             dim: 128,
             metric: 3,
             model: None,
-            index_type: 0,
+            spec: IndexSpec::Brute,
         });
         assert_eq!(result.unwrap_err(), Hairball::InvalidMetric);
     }
@@ -669,7 +713,7 @@ mod tests {
                 dim: 384,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
         let coll_dir = dir.join("collections").join("docs");
@@ -700,7 +744,7 @@ mod tests {
                 dim: 768,
                 metric: 2,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -722,7 +766,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -762,7 +806,7 @@ mod tests {
                 dim: 384,
                 metric: 1,
                 model: Some("all-MiniLM-L6-v2"),
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -785,7 +829,7 @@ mod tests {
                     dim: 384,
                     metric: 1,
                     model: None,
-                    index_type: 0,
+                    spec: IndexSpec::Brute,
                 })
                 .unwrap();
         }
@@ -810,7 +854,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -838,7 +882,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -880,7 +924,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -908,7 +952,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -935,7 +979,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -975,7 +1019,7 @@ mod tests {
                 dim: 3,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1002,7 +1046,7 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1041,7 +1085,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1059,7 +1103,7 @@ mod tests {
                 dim: 1,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1087,7 +1131,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1115,7 +1159,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1142,7 +1186,7 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1172,7 +1216,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1201,7 +1245,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1248,7 +1292,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1285,7 +1329,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1314,7 +1358,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1350,7 +1394,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1394,7 +1438,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1432,7 +1476,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1476,7 +1520,7 @@ mod tests {
                 dim: 2,
                 metric: 1,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1499,7 +1543,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1525,7 +1569,7 @@ mod tests {
                 dim: 3,
                 metric: 0,
                 model: None,
-                index_type: 0,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
 
@@ -1577,7 +1621,11 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
-                index_type: INDEX_TYPE_HNSW,
+                spec: IndexSpec::Hnsw {
+                    max_connections: DEFAULT_MAX_CONNECTIONS,
+                    ef_construction: DEFAULT_EF_CONSTRUCTION,
+                    ef_search: DEFAULT_EF_SEARCH,
+                },
             })
             .unwrap();
 
@@ -1603,7 +1651,11 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
-                index_type: INDEX_TYPE_HNSW,
+                spec: IndexSpec::Hnsw {
+                    max_connections: DEFAULT_MAX_CONNECTIONS,
+                    ef_construction: DEFAULT_EF_CONSTRUCTION,
+                    ef_search: DEFAULT_EF_SEARCH,
+                },
             })
             .unwrap();
 
@@ -1628,7 +1680,7 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
-                index_type: INDEX_TYPE_BRUTE,
+                spec: IndexSpec::Brute,
             })
             .unwrap();
         let meta = VectorMetadata {
@@ -1656,7 +1708,11 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
-                index_type: INDEX_TYPE_HNSW,
+                spec: IndexSpec::Hnsw {
+                    max_connections: DEFAULT_MAX_CONNECTIONS,
+                    ef_construction: DEFAULT_EF_CONSTRUCTION,
+                    ef_search: DEFAULT_EF_SEARCH,
+                },
             })
             .unwrap();
         let meta = VectorMetadata {
@@ -1683,7 +1739,11 @@ mod tests {
                 dim: 2,
                 metric: 0,
                 model: None,
-                index_type: INDEX_TYPE_HNSW,
+                spec: IndexSpec::Hnsw {
+                    max_connections: DEFAULT_MAX_CONNECTIONS,
+                    ef_construction: DEFAULT_EF_CONSTRUCTION,
+                    ef_search: DEFAULT_EF_SEARCH,
+                },
             })
             .unwrap();
 
@@ -1698,5 +1758,123 @@ mod tests {
         let dump_dir = dir.join("collections").join("pts").join("graph_dump");
         assert!(dump_dir.join("graph.hnsw.graph").exists(), "rotation should trigger graph dump");
         assert!(dump_dir.join("graph.ids").exists(), "rotation should trigger ids dump");
+    }
+
+    fn hnsw_spec_with_ef_search(ef_search: usize) -> IndexSpec {
+        IndexSpec::Hnsw {
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            ef_construction: DEFAULT_EF_CONSTRUCTION,
+            ef_search,
+        }
+    }
+
+    #[test]
+    fn given_set_search_ef_with_zero_then_returns_invalid_metric() {
+        let dir = temp_dir("set_search_ef_zero");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                spec: hnsw_spec_with_ef_search(DEFAULT_EF_SEARCH),
+            })
+            .unwrap();
+
+        let result = engine.set_search_ef("pts", 0);
+        assert_eq!(result.unwrap_err(), Hairball::InvalidMetric);
+    }
+
+    #[test]
+    fn given_set_search_ef_on_brute_collection_then_returns_ok_as_noop() {
+        let dir = temp_dir("set_search_ef_brute");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                spec: IndexSpec::Brute,
+            })
+            .unwrap();
+
+        assert!(engine.set_search_ef("pts", 200).is_ok());
+    }
+
+    #[test]
+    fn given_set_search_ef_on_unknown_collection_then_returns_not_found() {
+        let dir = temp_dir("set_search_ef_not_found");
+        let mut engine = new_engine(&dir);
+
+        let result = engine.set_search_ef("ghost", 200);
+        assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_set_search_ef_on_hnsw_collection_then_mutates_in_memory_ef_search() {
+        let dir = temp_dir("set_search_ef_hnsw_mutate");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                spec: hnsw_spec_with_ef_search(DEFAULT_EF_SEARCH),
+            })
+            .unwrap();
+
+        engine.set_search_ef("pts", 250).unwrap();
+
+        let clowder = engine.clowders.get("pts").unwrap();
+        match clowder.spec {
+            IndexSpec::Hnsw { ef_search, .. } => assert_eq!(ef_search, 250),
+            IndexSpec::Brute => panic!("Hnsw collection became Brute"),
+        }
+    }
+
+    #[test]
+    fn given_set_search_ef_on_hnsw_collection_then_persists_to_manifest_file() {
+        let dir = temp_dir("set_search_ef_persist");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                spec: hnsw_spec_with_ef_search(DEFAULT_EF_SEARCH),
+            })
+            .unwrap();
+
+        engine.set_search_ef("pts", 300).unwrap();
+
+        let manifest_path = dir.join("collections").join("pts").join("manifest.json");
+        let manifest = ManifestManager::load_manifest(&manifest_path).unwrap();
+        assert_eq!(manifest.hnsw_ef_search, 300);
+    }
+
+    #[test]
+    fn given_set_search_ef_on_brute_collection_then_does_not_overwrite_manifest_ef_search_field() {
+        let dir = temp_dir("set_search_ef_brute_no_write");
+        let mut engine = new_engine(&dir);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "pts",
+                dim: 2,
+                metric: 0,
+                model: None,
+                spec: IndexSpec::Brute,
+            })
+            .unwrap();
+
+        engine.set_search_ef("pts", 200).unwrap();
+
+        let manifest_path = dir.join("collections").join("pts").join("manifest.json");
+        let manifest = ManifestManager::load_manifest(&manifest_path).unwrap();
+        // Manifest on-disk ef_search stays at 0 because brute never had a meaningful value.
+        assert_eq!(manifest.hnsw_ef_search, 0);
     }
 }

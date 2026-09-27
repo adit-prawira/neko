@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::index::resource::Index;
+use crate::index::resource::{Index, IndexSpec};
 
 // Requirement wherer dim <= 4096
 pub const MAX_DIM: u32 = 4096;
@@ -18,4 +18,5 @@ pub struct Clowder {
     pub index: Arc<dyn Index>,
     pub vectors: Mutex<HashMap<String, Vec<f32>>>,
     pub metadata: Mutex<HashMap<String, String>>,
+    pub spec: IndexSpec,
 }

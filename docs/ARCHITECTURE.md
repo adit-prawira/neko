@@ -98,8 +98,8 @@ Both servers share the same engine — REST handlers and gRPC handlers (PR #38) 
         s_00001.vec     ← raw f32 vectors (mmap'd)
         s_00001.idx     ← HNSW adjacency lists
         s_00001.meta    ← metadata
-      manifest.json     ← active segments + compaction state
-      index.meta        ← HNSW params (M, ef_construction, ef_search)
+      manifest.json     ← collection metadata + HNSW tuning
+                          (index_type, max_connections, ef_construction, ef_search)
   models/
     models.toml              ← model registry (name → path, dim, language)
     all-MiniLM-L6-v2.onnx    ← ~90 MB, default model, bundled at build time
@@ -162,7 +162,8 @@ with 384 dimensions.
         │  (Phase 0)  Raw vector from CLI/API directly
         ▼
 Rust brute-force KNN → C SIMD dot_product() on all vectors
-         │       (or) HNSW beam search across layered graph (PR #60, in-memory only, lost on restart)
+         │       (or) HNSW beam search across layered graph
+         │       (PRs #60 / #62 / #63 — graph survives restart via .graph file)
          │       batch eval → C batch_distance() (4x unrolled matrix kernel)
          ▼
   Rust returns top-k (id, score) pairs

@@ -62,12 +62,13 @@ Neko is a **local-first vector database** that developers install on their machi
 - [ ] Single static binary build
 
 ### Phase 1 — Indexing (v0.2)
-- [x] HNSW index (layered graph, beam search, pruning) — **shipped in-memory** via `neko create --index hnsw` (issue #52, PR #60). Lost on restart; graph rebuilt from WAL-replayed vectors on next startup. Persistence deferred to a follow-up.
+- [x] HNSW index (layered graph, beam search, pruning) — shipped via `neko create --index hnsw` (issue #52, PR #60). Graph is now persisted on WAL rotation and reloaded on `Engine::init` (issues #53, PRs #62/#63) — no rebuild on cold start. Brute-force collections from Phase 0 continue to load and work unchanged.
 - [ ] Product quantization (PQ48, PQ24)
-- [ ] HNSW graph persistence to disk (currently rebuilt from in-memory vectors on each restart)
-- [ ] HNSW tuning flags (`--m`, `--ef-construction`, `--ef-search`)
-- [ ] Smarter shard-aware search strategy (Rayon parallel search across segments)
-- [ ] `neko tui` — Bubble Tea interactive dashboard
+- [x] HNSW graph persistence to disk — shipped (issues #53, PRs #62/#63). Graph dumped on WAL rotation, deserialised on init.
+- [x] HNSW tuning flags (`--m`, `--ef-construction`, `--ef-search`) — per-collection tunables shipped (issue #54, PR #65). `--ef-search` is also overrideable per-query at runtime via `neko search --ef-search <N>`. Defaults: m=16, ef_construction=200, ef_search=100. Settings persist across restart via the collection manifest.
+- [ ] Smarter shard-aware search strategy (Rayon parallel search across segments) — tracking issue #55.
+- [ ] `neko tui` — Bubble Tea interactive dashboard — tracking issue #56.
+- [ ] REST/gRPC parity for HNSW — REST `POST /v1/collections` and gRPC `CreateCollection` still create brute-only collections; tracking issue #64 to add `index` / `max_connections` / `ef_construction` fields to those surfaces.
 
 ### Phase 2 — Embeddings (v0.3)
 - [ ] ONNX Runtime integration (Rust bindings)

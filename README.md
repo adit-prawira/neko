@@ -29,8 +29,12 @@ neko create docs --dim 384 --metric cosine --index brute
 neko insert docs --id doc1 --file query.f32
 neko search docs --file query.f32 --k 10
 
-# Optional: same shape, but with the HNSW index for sub-linear search
-neko create docs_hnsw --dim 384 --metric cosine --index hnsw
+# Optional: same shape, but with the HNSW index for sub-linear search.
+# Tune per-collection with --max-connections and --ef-construction; override
+# the per-query beam with --ef-search at search time.
+neko create docs_hnsw --dim 384 --metric cosine --index hnsw \
+  --max-connections 32 --ef-construction 400
+neko search docs_hnsw --file query.f32 --k 10 --ef-search 200
 
 # Benchmark insert + search throughput
 neko bench --vectors 100000 --dim 384 --k 10
@@ -58,8 +62,9 @@ open http://localhost:3434/swagger/index.html
 | REST API (11 endpoints) | Shipped |
 | OpenAPI spec + Swagger UI (`/swagger/`) | Shipped |
 | gRPC API | 10 collection + vector RPCs shipped (PR #38); full status mapping + parity test (PR #39) |
-| Pluggable `Index` trait (Brute + HNSW) | Shipped in-memory, lost on restart (PR #60) |
-| HNSW graph persistence, TUI | Phase 1 |
+| Pluggable `Index` trait (Brute + HNSW) | Shipped in-memory (PR #60); graph persisted on WAL rotation, deserialised on init (PRs #62/#63) |
+| Per-collection HNSW tuning (`--max-connections`, `--ef-construction`, `--ef-search`) | Shipped (PR #65 / issue #54) |
+| TUI dashboard (Bubble Tea) | Phase 1 |
 | Bundled embedding model, `neko embed` | Phase 2 |
 | Clustering, replication | Phase 3 |
 
@@ -164,7 +169,3 @@ make proto
 - [Architecture](docs/ARCHITECTURE.md)
 - [API Reference](docs/API.md)
 - [Implementation Phases](docs/phases/)
-
-## License
-
-MIT

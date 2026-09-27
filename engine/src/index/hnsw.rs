@@ -13,14 +13,11 @@ use crate::shared::hairball::Hairball;
 use crate::shared::results::Result;
 use crate::wal::resource::{OperationCode, WalEntry};
 
-use super::resource::{Index, InputVector, ScoredVector};
+use super::resource::{Index, IndexSpec, InputVector, ScoredVector};
 
-pub const DEFAULT_MAX_NB_CONNECTION: usize = 16;
-pub const DEFAULT_EF_CONSTRUCTION: usize = 200;
 pub const DEFAULT_NB_LAYER: usize = 16;
 
 const INITIAL_BACKLOG: usize = 10_000;
-const SEARCH_BEAM_FACTOR: usize = 4;
 
 const DUMP_BASENAME: &str = "graph";
 
@@ -93,23 +90,31 @@ where
     graph_storage: Mutex<GraphStorage<D>>,
     ids: Mutex<NodeIdRegistry>,
     dim: usize,
+    spec: IndexSpec,
 }
 
 impl<D> HnswIndex<D>
 where
     D: Distance<f32> + Send + Sync + 'static,
 {
-    pub fn new(dim: usize, distance: D) -> Result<Self> {
-        let mut graph = Hnsw::new(DEFAULT_MAX_NB_CONNECTION, INITIAL_BACKLOG, DEFAULT_NB_LAYER, DEFAULT_EF_CONSTRUCTION, distance);
+    pub fn new(dim: usize, distance: D, spec: &IndexSpec) -> Result<Self> {
+        let IndexSpec::Hnsw {
+            max_connections, ef_construction, ..
+        } = spec
+        else {
+            return Err(Hairball::InternalError);
+        };
+        let mut graph = Hnsw::new(*max_connections, INITIAL_BACKLOG, DEFAULT_NB_LAYER, *ef_construction, distance);
         graph.set_searching_mode(true);
         Ok(Self {
             graph_storage: Mutex::new(GraphStorage::Owned(graph)),
             ids: Mutex::new(NodeIdRegistry::default()),
             dim,
+            spec: spec.clone(),
         })
     }
 
-    pub fn from_dump(directory: &Path, dim: usize, distance: D) -> Result<Self> {
+    pub fn from_dump(directory: &Path, dim: usize, distance: D, spec: &IndexSpec) -> Result<Self> {
         let loader = Box::new(HnswIo::new(directory, DUMP_BASENAME));
         let loaded = LoadedHnsw::try_new(loader, |loader: &Box<HnswIo>| -> Result<Hnsw<'_, f32, D>> {
             let mut graph = loader.load_hnsw_with_dist(distance).map_err(|_| Hairball::CorruptedSegment)?;
@@ -134,6 +139,7 @@ where
                 node_to_external,
             }),
             dim,
+            spec: spec.clone(),
         })
     }
 }
@@ -206,7 +212,10 @@ where
             return Ok(Vec::new());
         }
 
-        let search_beam = top_k.max(DEFAULT_MAX_NB_CONNECTION) * SEARCH_BEAM_FACTOR;
+        let IndexSpec::Hnsw { ef_search, .. } = self.spec else {
+            return Err(Hairball::InternalError);
+        };
+        let search_beam = ef_search.max(top_k);
         let raw_neighbours: Vec<Neighbour> = {
             let graph_storage = self.graph_storage.lock().unwrap();
             graph_storage.with_graph(|graph| graph.search(query, top_k, search_beam))
@@ -283,11 +292,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::resource::{DEFAULT_EF_CONSTRUCTION, DEFAULT_EF_SEARCH, DEFAULT_MAX_CONNECTIONS};
     use crate::segment::resource::VectorMetadata;
     use hnsw_rs::prelude::DistL2;
 
     fn build_l2_index(dim: usize) -> HnswIndex<DistL2> {
-        HnswIndex::<DistL2>::new(dim, DistL2).expect("hnsw construction never fails")
+        HnswIndex::<DistL2>::new(dim, DistL2, &IndexSpec::hnsw_default()).expect("hnsw construction never fails")
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -586,7 +596,7 @@ mod tests {
         let dump_dir = temp_dir.join("graph_dump");
         original_index.serialise(&dump_dir).unwrap();
 
-        let restored_index = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2).unwrap();
+        let restored_index = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2, &IndexSpec::hnsw_default()).unwrap();
         let results = restored_index.search(&HashMap::new(), &[1.0, 0.0], 1, 0, 2).unwrap();
 
         assert_eq!(results.len(), 1);
@@ -646,7 +656,7 @@ mod tests {
         let dump_dir = temp_dir.join("graph_dump");
         original_index.serialise(&dump_dir).unwrap();
 
-        let loaded_index = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2).unwrap();
+        let loaded_index = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2, &IndexSpec::hnsw_default()).unwrap();
         loaded_index.insert("new", &[0.0, 1.0]).unwrap();
 
         let results = loaded_index.search(&HashMap::new(), &[0.0, 1.0], 2, 0, 2).unwrap();
@@ -666,7 +676,7 @@ mod tests {
         index.serialise(&dump_dir).unwrap();
         std::fs::remove_file(dump_dir.join("graph.hnsw.graph")).unwrap();
 
-        let result = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2);
+        let result = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2, &IndexSpec::hnsw_default());
 
         assert!(matches!(result, Err(Hairball::CorruptedSegment)));
     }
@@ -681,8 +691,138 @@ mod tests {
         index.serialise(&dump_dir).unwrap();
         std::fs::remove_file(dump_dir.join("graph.ids")).unwrap();
 
-        let result = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2);
+        let result = HnswIndex::<DistL2>::from_dump(&dump_dir, 2, DistL2, &IndexSpec::hnsw_default());
 
         assert!(matches!(result, Err(Hairball::CorruptedSegment)));
+    }
+
+    fn build_l2_hnsw_with(max_connections: usize, ef_construction: usize, ef_search: usize) -> HnswIndex<DistL2> {
+        let spec = IndexSpec::Hnsw {
+            max_connections,
+            ef_construction,
+            ef_search,
+        };
+        HnswIndex::<DistL2>::new(2, DistL2, &spec).expect("hnsw construction never fails")
+    }
+
+    fn random_brute_dataset(count: usize) -> HashMap<String, Vec<f32>> {
+        (0..count)
+            .map(|index| {
+                let id = format!("v{}", index);
+                let vector = vec![index as f32 / count as f32, (count - index) as f32 / count as f32];
+                (id, vector)
+            })
+            .collect()
+    }
+
+    fn random_queries(count: usize) -> Vec<Vec<f32>> {
+        (0..count).map(|index| vec![index as f32 / count as f32, 1.0 - index as f32 / count as f32]).collect()
+    }
+
+    fn top_k_brute_ids(vectors: &HashMap<String, Vec<f32>>, query: &[f32], k: usize) -> Vec<String> {
+        let mut distances: Vec<(String, f32)> = vectors
+            .iter()
+            .map(|(id, vector)| {
+                let squared: f32 = vector.iter().zip(query.iter()).map(|(left, right)| (left - right).powi(2)).sum();
+                (id.clone(), squared.sqrt())
+            })
+            .collect();
+        distances.sort_by(|left, right| left.1.total_cmp(&right.1));
+        distances.into_iter().take(k).map(|(id, _)| id).collect()
+    }
+
+    fn overlap_ratio(a: &[String], b: &[String]) -> f32 {
+        let a_set: std::collections::HashSet<&str> = a.iter().map(String::as_str).collect();
+        let b_set: std::collections::HashSet<&str> = b.iter().map(String::as_str).collect();
+        let overlap = a_set.intersection(&b_set).count();
+        overlap as f32 / a.len() as f32
+    }
+
+    #[test]
+    fn given_custom_ef_search_then_search_uses_overridden_value() {
+        // Acceptance for issue #54: with ef_search = 20 the search beam is narrow
+        // but must still surface the exact-nearest vector when one exists. The hnsw
+        // search's beam width governs how many candidates it considers, so this
+        // confirms the spec-supplied ef_search is the actual value used.
+        let mut vectors = random_brute_dataset(500);
+        let item_vecs: Vec<InputVector> = vectors.iter().map(|(id, vector)| to_input_vector(id, vector)).collect();
+
+        let index = build_l2_hnsw_with(DEFAULT_MAX_CONNECTIONS, DEFAULT_EF_CONSTRUCTION, 20);
+        index.insert_batch(&item_vecs).unwrap();
+
+        // Insert a vector exactly at the query point so the nearest neighbor is
+        // unambiguous regardless of how wide the beam ends up being.
+        let exact_id = String::from("wrong_id");
+        let exact_vector = vec![0.5_f32, 0.5_f32];
+        index.insert(&exact_id, &exact_vector).unwrap();
+        vectors.insert(exact_id.clone(), exact_vector.clone());
+
+        let results = index.search(&vectors, &exact_vector, 10, 0, 2).unwrap();
+
+        assert!(
+            results.iter().any(|result| result.id == exact_id),
+            "exact-match vector must appear in results with ef_search override"
+        );
+    }
+
+    #[test]
+    fn given_high_max_connections_then_recall_improves_vs_low() {
+        // Acceptance for issue #54: dense graphs (m=64) outperform sparse graphs (m=4)
+        // on recall against brute ground truth.
+        let vectors = random_brute_dataset(500);
+        let item_vecs: Vec<InputVector> = vectors.iter().map(|(id, vector)| to_input_vector(id, vector)).collect();
+        let queries = random_queries(20);
+
+        let index_low_m = build_l2_hnsw_with(4, DEFAULT_EF_CONSTRUCTION, DEFAULT_EF_SEARCH);
+        index_low_m.insert_batch(&item_vecs).unwrap();
+        let index_high_m = build_l2_hnsw_with(64, DEFAULT_EF_CONSTRUCTION, DEFAULT_EF_SEARCH);
+        index_high_m.insert_batch(&item_vecs).unwrap();
+
+        let mut recall_low = 0.0_f32;
+        let mut recall_high = 0.0_f32;
+        for query in &queries {
+            let brute_top = top_k_brute_ids(&vectors, query, 10);
+
+            let low_results = index_low_m.search(&vectors, query, 10, 0, 2).unwrap();
+            let low_ids: Vec<String> = low_results.iter().map(|result| result.id.clone()).collect();
+            recall_low += overlap_ratio(&low_ids, &brute_top);
+
+            let high_results = index_high_m.search(&vectors, query, 10, 0, 2).unwrap();
+            let high_ids: Vec<String> = high_results.iter().map(|result| result.id.clone()).collect();
+            recall_high += overlap_ratio(&high_ids, &brute_top);
+        }
+        let avg_low = recall_low / queries.len() as f32;
+        let avg_high = recall_high / queries.len() as f32;
+
+        assert!(avg_high >= avg_low, "high max_connections recall ({}) should be >= low ({})", avg_high, avg_low);
+    }
+
+    #[test]
+    fn given_low_ef_search_then_recall_lower_than_high_ef_search() {
+        // Acceptance adapted from issue #54: low ef_search truncates the beam,
+        // producing smaller overlap with brute ground truth than high ef_search.
+        // (Speed aspect is hardware-dependent and skipped per AGENTS.md guidance.)
+        //
+        // Key setup: top_k = 200 so the beam (max(top_k, ef_search)) depends on
+        // ef_search. With low ef_search the search has fewer candidates and recall
+        // drops below brute ground truth.
+        let vectors = random_brute_dataset(500);
+        let item_vecs: Vec<InputVector> = vectors.iter().map(|(id, vector)| to_input_vector(id, vector)).collect();
+
+        let index_low_ef = build_l2_hnsw_with(DEFAULT_MAX_CONNECTIONS, DEFAULT_EF_CONSTRUCTION, 5);
+        index_low_ef.insert_batch(&item_vecs).unwrap();
+        let index_high_ef = build_l2_hnsw_with(DEFAULT_MAX_CONNECTIONS, DEFAULT_EF_CONSTRUCTION, 500);
+        index_high_ef.insert_batch(&item_vecs).unwrap();
+
+        let query = vec![0.5, 0.5];
+        let brute_top = top_k_brute_ids(&vectors, &query, 200);
+
+        let low_ids: Vec<String> = index_low_ef.search(&vectors, &query, 200, 0, 2).unwrap().into_iter().map(|result| result.id).collect();
+        let high_ids: Vec<String> = index_high_ef.search(&vectors, &query, 200, 0, 2).unwrap().into_iter().map(|result| result.id).collect();
+
+        let recall_low = overlap_ratio(&low_ids, &brute_top);
+        let recall_high = overlap_ratio(&high_ids, &brute_top);
+
+        assert!(recall_high >= recall_low, "high ef_search recall ({}) should be >= low ({})", recall_high, recall_low);
     }
 }

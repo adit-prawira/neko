@@ -12,11 +12,12 @@ import (
 var (
 	searchFile string
 	searchK    uint32
+	efSearch   uint32
 )
 
 func NewSearchCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "search <collection> --file <query.f32> --k <N>",
+		Use:   "search <collection> --file <query.f32> --k <N> [--ef-search <N>]",
 		Short: "Search top-K nearest neighbors",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -29,6 +30,10 @@ func NewSearchCmd() *cobra.Command {
 				return fmt.Errorf("file '%s' has invalid size: must be a multiple of 4 bytes (raw f32)", searchFile)
 			}
 			floats := unsafe.Slice((*float32)(unsafe.Pointer(&data[0])), len(data)/4)
+			if err := ffi.SetSearchEf(name, efSearch); err != nil {
+				return err
+			}
+
 			results, err := ffi.Search(name, floats, searchK)
 			if err != nil {
 				return err
@@ -42,6 +47,7 @@ func NewSearchCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&searchFile, "file", "f", "", "path to raw f32 query vector file (required)")
 	cmd.Flags().Uint32VarP(&searchK, "k", "k", 10, "number of results")
+	cmd.Flags().Uint32Var(&efSearch, "ef-search", 100, "HNSW search beam width (hnsw collection only)")
 	cmd.MarkFlagRequired("file")
 	return cmd
 }

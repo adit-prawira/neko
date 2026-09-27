@@ -21,6 +21,9 @@ impl ManifestManager {
                 segments: Vec::new(),
                 model: None,
                 index_type: 0,
+                hnsw_max_connections: 0,
+                hnsw_ef_construction: 0,
+                hnsw_ef_search: 0,
             }
         };
 
@@ -47,6 +50,9 @@ impl ManifestManager {
                 segments: Vec::new(),
                 model: None,
                 index_type: 0,
+                hnsw_max_connections: 0,
+                hnsw_ef_construction: 0,
+                hnsw_ef_search: 0,
             }
         };
 
@@ -77,6 +83,9 @@ impl ManifestManager {
                 model: None,
                 segments: Vec::new(),
                 index_type: 0,
+                hnsw_max_connections: 0,
+                hnsw_ef_construction: 0,
+                hnsw_ef_search: 0,
             })
         }
     }
@@ -162,6 +171,9 @@ mod tests {
             model: Some("all-MiniLM-L6-v2".to_string()),
             segments: vec!["seg_001".to_string()],
             index_type: 0,
+            hnsw_max_connections: 0,
+            hnsw_ef_construction: 0,
+            hnsw_ef_search: 0,
         };
 
         ManifestManager::save_manifest(&manifest_path, &manifest).unwrap();
@@ -192,6 +204,9 @@ mod tests {
             model: None,
             segments: vec![],
             index_type: 0,
+            hnsw_max_connections: 0,
+            hnsw_ef_construction: 0,
+            hnsw_ef_search: 0,
         };
 
         ManifestManager::save_manifest(&manifest_path, &manifest).unwrap();
@@ -229,6 +244,9 @@ mod tests {
             model: None,
             segments: vec![],
             index_type: 0,
+            hnsw_max_connections: 0,
+            hnsw_ef_construction: 0,
+            hnsw_ef_search: 0,
         };
 
         ManifestManager::save_manifest(&manifest_path, &manifest).unwrap();

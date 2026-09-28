@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use crate::index::factory::IndexFactory;
+use crate::index::multi_segment_search::{MultiSegmentSearch, MultiSegmentSearchParams};
 use crate::index::resource::{IndexSpec, InputVector, ScoredVector};
 use crate::manifest::manager::ManifestManager;
 use crate::manifest::resource::Manifest;
+use crate::segment::reader::SegmentReader;
 use crate::segment::resource::VectorMetadata;
 use crate::shared::hairball::Hairball;
 use crate::shared::results::{NekoStats, Result};
@@ -496,12 +498,39 @@ impl Engine {
 
     pub fn search(&self, name: &str, query: &[f32], top_k: usize) -> Result<Vec<ScoredVector>> {
         let clowder = self.clowders.get(name).ok_or(Hairball::NotFound)?;
+        let is_dimension_match = query.len() == clowder.dim as usize;
 
-        if query.len() != clowder.dim as usize {
+        if !is_dimension_match {
             return Err(Hairball::DimMismatch);
         }
+
         let vectors = clowder.vectors.lock().unwrap();
-        clowder.index.search(&vectors, query, top_k, clowder.metric, clowder.dim)
+
+        let live_top_k = clowder.index.search(&vectors, query, top_k, clowder.metric, clowder.dim)?;
+
+        // Single-source path where WAL segments on disk will not rotate. The live search is
+        // authoritative
+        let manifest_path = self.data_directory.join("collections").join(name).join("manifest.json");
+        let segment_paths = ManifestManager::load_segments(&manifest_path)?;
+
+        if segment_paths.is_empty() {
+            return Ok(live_top_k);
+        }
+
+        let readers: Vec<SegmentReader> = segment_paths
+            .iter()
+            .map(|path: &PathBuf| SegmentReader::open_from_directory(path.as_path()))
+            .collect::<Result<Vec<_>>>()?;
+
+        let search_params = MultiSegmentSearchParams {
+            readers: &readers,
+            query,
+            top_k,
+            metric: clowder.metric,
+            dim: clowder.dim,
+        };
+
+        MultiSegmentSearch::search(live_top_k, &search_params)
     }
 
     fn checkpoint_index(&mut self, clowder: &Arc<Clowder>, name: &str) -> Result<()> {

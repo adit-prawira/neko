@@ -35,6 +35,27 @@ impl<'a> Iterator for VectorIter<'a> {
     }
 }
 
+pub struct SegmentMetaIter<'a> {
+    reader: &'a SegmentReader,
+    current: u64,
+    total: u64,
+    meta_map: Mmap,
+}
+
+impl<'a> Iterator for SegmentMetaIter<'a> {
+    type Item = Result<VectorMetadata>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current >= self.total {
+            return None;
+        }
+
+        let index = self.current;
+        self.current += 1;
+        Some(self.reader.read_metadata_from(&self.meta_map, index))
+    }
+}
+
 /*
  * SegmentReader has responsibilites to:
  * -> Open an existing segment via mmap and map it to .vec and .idx files director into the process
@@ -44,6 +65,7 @@ impl<'a> Iterator for VectorIter<'a> {
  * -> Brute-force KNN loop iterates all segments and computes distance via SIMD on the mmap's
  *    vector data
  * */
+#[derive(Debug)]
 pub struct SegmentReader {
     meta: SegmentMeta,
     vector_mmap: Mmap,
@@ -64,6 +86,29 @@ impl SegmentReader {
         let reader = Self { meta, vector_mmap, index_mmap };
         reader.validate()?;
         Ok(reader)
+    }
+
+    pub fn open_from_directory(directory: &Path) -> Result<Self> {
+        // Derive dimension and count from the segment header.
+        // Header is written at the start of segment.vec and again at the
+        // start of segment.idx. Reading it once is enough
+        let header_path = directory.join("segment.vec");
+        let header_file = File::open(&header_path)?;
+        let header_mmap = unsafe { Mmap::map(&header_file)? };
+        let header = unsafe { &*(header_mmap.as_ptr() as *const SegmentHeader) };
+
+        let is_valid_segment_header = header.magic == SEGMENT_MAGIC && header.version == SEGMENT_VERSION;
+        if !is_valid_segment_header {
+            return Err(Hairball::CorruptedSegment);
+        }
+
+        let meta = SegmentMeta {
+            directory: directory.to_path_buf(),
+            dim: header.dim,
+            count: header.count,
+        };
+
+        Self::open(directory, meta)
     }
 
     pub fn dim(&self) -> u32 {
@@ -101,6 +146,26 @@ impl SegmentReader {
             current: 0,
             total: self.meta.count,
         }
+    }
+
+    pub fn read_metadata_from(&self, meta_mmap: &Mmap, index: u64) -> Result<VectorMetadata> {
+        let entry = self.read_index_entry(index)?;
+        let header_size = std::mem::size_of::<SegmentHeader>() as u64;
+        let start = (header_size + entry.meta_offset) as usize;
+        let end = start + entry.meta_length as usize;
+
+        serde_json::from_slice(&meta_mmap[start..end]).map_err(Into::into)
+    }
+
+    pub fn iter_metadata(&self) -> Result<SegmentMetaIter<'_>> {
+        let meta_file = File::open(self.meta.directory.join("segment.meta"))?;
+        let meta_mmap = unsafe { Mmap::map(&meta_file)? };
+        Ok(SegmentMetaIter {
+            reader: self,
+            current: 0,
+            total: self.meta.count,
+            meta_map: meta_mmap,
+        })
     }
 
     fn validate(&self) -> Result<()> {
@@ -262,5 +327,92 @@ mod tests {
         };
         let result = SegmentReader::open(&dir.join("test_seg"), meta);
         assert!(matches!(result, Err(Hairball::CorruptedSegment)));
+    }
+
+    #[test]
+    fn given_a_valid_segment_then_open_from_directory_derives_dim_and_count_from_header() {
+        // open_from_directory must not require the caller to supply dim and
+        // count — both come from the SegmentHeader written by SegmentWriter::finish.
+        let dir = std::env::temp_dir().join("neko_test_reader_open_from_dir_valid");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let vectors = [
+            (&[1.0_f32, 2.0][..], make_metadata("a", "")),
+            (&[3.0_f32, 4.0][..], make_metadata("b", "")),
+            (&[5.0_f32, 6.0][..], make_metadata("c", "")),
+        ];
+        let _meta = create_test_segment(&dir, 2, &vectors);
+
+        let reader = SegmentReader::open_from_directory(&dir.join("test_seg")).expect("valid segment should open via header");
+
+        assert_eq!(reader.dim(), 2, "dim must be read from SegmentHeader");
+        assert_eq!(reader.length(), 3, "count must be read from SegmentHeader");
+    }
+
+    #[test]
+    fn given_a_segment_with_corrupted_header_then_open_from_directory_returns_corrupted_segment() {
+        let dir = std::env::temp_dir().join("neko_test_reader_open_from_dir_corrupt");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let _meta = create_test_segment(&dir, 4, &[]);
+
+        let mut file = std::fs::OpenOptions::new().write(true).open(dir.join("test_seg").join("segment.vec")).unwrap();
+        file.write_all(&[0xFF; 8]).unwrap();
+
+        let result = SegmentReader::open_from_directory(&dir.join("test_seg"));
+        assert!(matches!(result, Err(Hairball::CorruptedSegment)));
+    }
+
+    #[test]
+    fn given_a_segment_with_vectors_then_iter_metadata_yields_all_in_order() {
+        // Streaming iterator must produce the same metadata as repeated
+        // get_metadata calls, in the same order as iter_vectors.
+        let dir = std::env::temp_dir().join("neko_test_reader_iter_metadata");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let vectors = [(&[10.0_f32, 20.0][..], make_metadata("alpha", "x")), (&[30.0_f32, 40.0][..], make_metadata("beta", "y"))];
+        let _meta = create_test_segment(&dir, 2, &vectors);
+
+        let reader = SegmentReader::open(
+            &dir.join("test_seg"),
+            SegmentMeta {
+                directory: dir.join("test_seg"),
+                dim: 2,
+                count: 2,
+            },
+        )
+        .unwrap();
+
+        let collected: Vec<VectorMetadata> = reader.iter_metadata().unwrap().map(|item| item.unwrap()).collect();
+        assert_eq!(collected.len(), 2);
+        assert_eq!(collected[0].id, "alpha");
+        assert_eq!(collected[0].custom, "x");
+        assert_eq!(collected[1].id, "beta");
+        assert_eq!(collected[1].custom, "y");
+    }
+
+    #[test]
+    fn given_a_segment_with_no_vectors_then_iter_metadata_is_empty() {
+        let dir = std::env::temp_dir().join("neko_test_reader_iter_metadata_empty");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let _meta = create_test_segment(&dir, 3, &[]);
+
+        let reader = SegmentReader::open(
+            &dir.join("test_seg"),
+            SegmentMeta {
+                directory: dir.join("test_seg"),
+                dim: 3,
+                count: 0,
+            },
+        )
+        .unwrap();
+
+        let collected: Vec<VectorMetadata> = reader.iter_metadata().unwrap().map(|item| item.unwrap()).collect();
+        assert!(collected.is_empty(), "empty segment must yield zero metadata");
     }
 }

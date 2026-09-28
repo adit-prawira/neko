@@ -517,6 +517,7 @@ dependencies = [
  "hnsw_rs",
  "memmap2",
  "ouroboros",
+ "rayon",
  "serde",
  "serde_json",
 ]

@@ -1,8 +1,7 @@
 use std::collections::{BinaryHeap, HashMap};
 
 use crate::segment::resource::Metric;
-use crate::shared;
-use crate::shared::hairball::Hairball;
+use crate::shared::results::Result;
 
 use super::resource::ScoredVector;
 
@@ -17,7 +16,7 @@ pub struct KNNSearchParams<'a> {
 pub struct KNN;
 
 impl KNN {
-    pub fn search(vectors: &HashMap<String, Vec<f32>>, params: &KNNSearchParams) -> Result<Vec<ScoredVector>, Hairball> {
+    pub fn search(vectors: &HashMap<String, Vec<f32>>, params: &KNNSearchParams) -> Result<Vec<ScoredVector>> {
         if vectors.is_empty() || params.top_k == 0 {
             return Ok(Vec::new());
         }
@@ -26,10 +25,10 @@ impl KNN {
 
         // add additional slot to allow reallocation of vector on the (capacity'th + 1) push
         let mut heap = BinaryHeap::with_capacity(heap_capacity + 1);
-        let metric = Self::resolve_metric(&params.metric)?;
+        let metric = Metric::from_u8(&params.metric)?;
 
         for (id, vector) in vectors {
-            let distance = Self::resolve_distance(&metric, params.query, vector, &params.dim);
+            let distance = metric.distance(params.query, vector, &params.dim);
             heap.push(ScoredVector {
                 id: id.to_string(),
                 score: distance,
@@ -39,38 +38,9 @@ impl KNN {
             }
         }
         let mut scored_vectors: Vec<ScoredVector> = heap.into_vec();
-        Self::resolve_sort(&metric, &mut scored_vectors);
+        metric.sort(&mut scored_vectors);
 
         Ok(scored_vectors)
-    }
-
-    fn resolve_metric(metric: &u8) -> Result<Metric, Hairball> {
-        match *metric {
-            0 => Ok(Metric::L2),
-            1 => Ok(Metric::Cosine),
-            2 => Ok(Metric::Dot),
-            _ => Err(Hairball::InvalidMetric),
-        }
-    }
-    fn resolve_sort(metric: &Metric, scored_vectors: &mut Vec<ScoredVector>) {
-        if *metric == Metric::Dot {
-            for scored_vector in &mut *scored_vectors {
-                scored_vector.score = -scored_vector.score;
-            }
-            scored_vectors.sort_by(|a, b| b.score.total_cmp(&a.score));
-        } else {
-            scored_vectors.sort_by(|a, b| a.score.total_cmp(&b.score));
-        }
-    }
-
-    fn resolve_distance(metric: &Metric, query: &[f32], vector: &[f32], dim: &u32) -> f32 {
-        unsafe {
-            match *metric {
-                Metric::L2 => shared::l2_distance(query.as_ptr(), vector.as_ptr(), *dim),
-                Metric::Cosine => shared::cosine_distance(query.as_ptr(), vector.as_ptr(), *dim),
-                Metric::Dot => -shared::dot_product(query.as_ptr(), vector.as_ptr(), *dim),
-            }
-        }
     }
 }
 

@@ -1,6 +1,6 @@
 use rayon::iter::IntoParallelRefIterator;
 use rayon::prelude::*;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 
 use crate::segment::reader::SegmentReader;
 use crate::segment::resource::Metric;
@@ -35,10 +35,11 @@ impl MultiSegmentSearch {
         let should_sort_descending = matches!(metric, Metric::Dot);
 
         // ensure head capacity to be as small as possible
-        let head_capacity = search_params.top_k.max(live_top_k.len());
+        let heap_capacity = search_params.top_k.max(live_top_k.len());
 
         // add additional heap to allow re-allocation of vector on the N'th + 1 capacity push
-        let mut heap: BinaryHeap<ScoredVector> = BinaryHeap::with_capacity(head_capacity + 1);
+        let mut heap: BinaryHeap<ScoredVector> = BinaryHeap::with_capacity(heap_capacity + 1);
+        let mut recorded: HashSet<String> = HashSet::with_capacity(heap_capacity + 1);
 
         let partial_top_ks: Vec<PartialTopK> = search_params
             .readers
@@ -48,8 +49,12 @@ impl MultiSegmentSearch {
 
         for partial_top_k in partial_top_ks {
             for scored_vector in partial_top_k.take_scored_vectors() {
+                if !recorded.insert(scored_vector.id.clone()) {
+                    continue;
+                }
+
                 heap.push(scored_vector);
-                let is_above_capacity = heap.len() > head_capacity;
+                let is_above_capacity = heap.len() > heap_capacity;
                 if is_above_capacity {
                     heap.pop();
                 }
@@ -57,8 +62,12 @@ impl MultiSegmentSearch {
         }
 
         for scored_vector in live_top_k {
+            if !recorded.insert(scored_vector.id.clone()) {
+                continue;
+            }
+
             heap.push(scored_vector);
-            let is_above_capacity = heap.len() > head_capacity;
+            let is_above_capacity = heap.len() > heap_capacity;
             if is_above_capacity {
                 heap.pop();
             }
@@ -300,5 +309,33 @@ mod tests {
         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
         assert_eq!(scored[0].0, "near");
         assert_eq!(scored[1].0, "mid");
+    }
+
+    #[test]
+    fn given_duplicate_id_across_live_and_segments_then_each_id_surfaces_only_once() {
+        // Regression for #66 (issue /adit-prawira/neko/issues/66).
+        // Setup: live top-K contains "near" with score 0.5; segment also
+        // contains "near" (vector [1, 0]). Without dedup, "near" appears
+        // twice in the merged result. Independent ground truth: live has
+        // {near, far}, segment has {near, mid}. After dedup the unique-id
+        // set must be exactly {near, mid, far}, with "near" appearing once.
+        let dir = fresh_dir("dedup_live_plus_segment");
+        let seg_path = write_segment(&dir, "seg", 2, &[("near", &[1.0, 0.0][..]), ("mid", &[5.0, 0.0][..])]);
+        let readers = vec![open_reader(&seg_path)];
+
+        let live = vec![ScoredVector { id: "near".into(), score: 0.5 }, ScoredVector { id: "far".into(), score: 9.0 }];
+
+        let params = MultiSegmentSearchParams {
+            readers: &readers,
+            query: &[1.0_f32, 0.0][..],
+            top_k: 5,
+            metric: 0,
+            dim: 2,
+        };
+        let result = MultiSegmentSearch::search(live, &params).unwrap();
+
+        let mut ids = ids_ordered(&result);
+        ids.sort();
+        assert_eq!(ids, vec!["far", "mid", "near"]);
     }
 }

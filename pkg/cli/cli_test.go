@@ -12,6 +12,7 @@ import (
 
 	"github.com/adit-prawira/neko/internal/config"
 	"github.com/adit-prawira/neko/internal/ffi"
+	"github.com/adit-prawira/neko/internal/shared"
 )
 
 func cliSetup(t *testing.T) string {
@@ -836,9 +837,9 @@ func TestFormatBytes(t *testing.T) {
 		{1024 * 1024 * 1024, "1GB"},
 	}
 	for _, testCase := range cases {
-		got := formatBytes(testCase.input)
+		got := shared.FormatBytes(testCase.input)
 		if got != testCase.expected {
-			t.Errorf("formatBytes(%d) = %q, want %q", testCase.input, got, testCase.expected)
+			t.Errorf("shared.FormatBytes(%d) = %q, want %q", testCase.input, got, testCase.expected)
 		}
 	}
 }

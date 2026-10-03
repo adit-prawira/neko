@@ -39,6 +39,7 @@ func NewRootCommand() *cobra.Command {
 		NewStatsCmd(),
 		NewBenchCmd(),
 		NewConfigCmd(),
+		NewTuiCmd(),
 	)
 	return rootCmd
 }

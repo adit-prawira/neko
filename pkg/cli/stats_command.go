@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/adit-prawira/neko/internal/ffi"
+	"github.com/adit-prawira/neko/internal/shared"
 	"github.com/spf13/cobra"
 )
 
@@ -86,22 +87,8 @@ func renderStats(out io.Writer, rows []statsRow, asJSON bool) error {
 	fmt.Fprintln(w, "Collection\tDim\tVectors\tDisk\tSegments")
 	for _, r := range rows {
 		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%d\n",
-			r.Name, r.Dim, r.VectorCount, formatBytes(r.StorageBytes), r.Segments)
+			r.Name, r.Dim, r.VectorCount, shared.FormatBytes(r.StorageBytes), r.Segments)
 	}
 
 	return w.Flush()
-}
-
-func formatBytes(n uint64) string {
-	const k = uint64(1024)
-	switch {
-	case n < k:
-		return fmt.Sprintf("%dB", n)
-	case n < k*k:
-		return fmt.Sprintf("%dKB", n/k)
-	case n < k*k*k:
-		return fmt.Sprintf("%dMB", n/(k*k))
-	default:
-		return fmt.Sprintf("%dGB", n/(k*k*k))
-	}
 }

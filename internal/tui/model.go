@@ -8,11 +8,13 @@ import (
 )
 
 type Collection struct {
-	Name string
+	Name  string
+	Stats ffi.NekoStats
 }
 
 type Model struct {
-	Collections []Collection
+	Collections   []Collection
+	SelectedIndex int
 }
 
 func Run() error {
@@ -33,7 +35,18 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch message.String() {
 		case "q", "esc":
 			return m, tea.Quit
+		case "up":
+			shouldGoUp := m.SelectedIndex > 0
+			if shouldGoUp {
+				m.SelectedIndex--
+			}
+		case "down":
+			shouldGoDown := m.SelectedIndex < len(m.Collections)-1
+			if shouldGoDown {
+				m.SelectedIndex++
+			}
 		}
+
 	}
 	return m, nil
 }
@@ -46,7 +59,8 @@ func (m Model) View() tea.View {
 
 func initialModel() Model {
 	return Model{
-		Collections: loadCollections(),
+		Collections:   loadCollections(),
+		SelectedIndex: 0,
 	}
 }
 
@@ -58,7 +72,14 @@ func loadCollections() []Collection {
 
 	items := make([]Collection, 0, len(names))
 	for _, name := range names {
-		items = append(items, Collection{Name: name})
+		stats, err := ffi.Stats(name)
+		if err != nil {
+			continue
+		}
+		items = append(items, Collection{
+			Name:  name,
+			Stats: stats,
+		})
 	}
 
 	return items

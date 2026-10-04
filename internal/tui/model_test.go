@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/adit-prawira/neko/internal/ffi"
 )
 
 func TestUpdate(t *testing.T) {
@@ -281,10 +282,70 @@ func TestView(t *testing.T) {
 }
 
 func TestInit(t *testing.T) {
-	t.Run("given_model_then_returns_no_command", func(t *testing.T) {
+	t.Run("given_model_then_returns_tick_command", func(t *testing.T) {
 		m := Model{}
-		if cmd := m.Init(); cmd != nil {
-			t.Fatalf("expected nil command, got %T", cmd)
+		cmd := m.Init()
+		if cmd == nil {
+			t.Fatal("expected non-nil command, got nil")
+		}
+	})
+}
+
+func TestRefreshSearch(t *testing.T) {
+	t.Run("given_collection_panel_focused_then_does_nothing", func(t *testing.T) {
+		m := &Model{
+			FocusedPanel:  collectionPanel,
+			LastQuery:     []float32{0.1, 0.2, 0.3},
+			Collections:   []Collection{{Name: "docs"}},
+			SearchResults: []ffi.NekoSearchResult{{ID: "old", Score: 1.0}},
+		}
+		m.refreshSearch()
+
+		if len(m.SearchResults) != 1 || m.SearchResults[0].ID != "old" {
+			t.Fatalf("expected search results to remain unchanged, got %v", m.SearchResults)
+		}
+	})
+
+	t.Run("given_empty_last_query_then_does_nothing", func(t *testing.T) {
+		m := &Model{
+			FocusedPanel:  resultsPanel,
+			LastQuery:     nil,
+			Collections:   []Collection{{Name: "docs"}},
+			SearchResults: []ffi.NekoSearchResult{{ID: "old", Score: 1.0}},
+		}
+		m.refreshSearch()
+
+		if len(m.SearchResults) != 1 || m.SearchResults[0].ID != "old" {
+			t.Fatalf("expected search results to remain unchanged, got %v", m.SearchResults)
+		}
+	})
+
+	t.Run("given_no_collections_then_does_nothing", func(t *testing.T) {
+		m := &Model{
+			FocusedPanel:  resultsPanel,
+			LastQuery:     []float32{0.1, 0.2, 0.3},
+			Collections:   nil,
+			SearchResults: []ffi.NekoSearchResult{{ID: "old", Score: 1.0}},
+		}
+		m.refreshSearch()
+
+		if len(m.SearchResults) != 1 || m.SearchResults[0].ID != "old" {
+			t.Fatalf("expected search results to remain unchanged, got %v", m.SearchResults)
+		}
+	})
+
+	t.Run("given_invalid_selected_index_then_does_nothing", func(t *testing.T) {
+		m := &Model{
+			FocusedPanel:  resultsPanel,
+			LastQuery:     []float32{0.1, 0.2, 0.3},
+			Collections:   []Collection{{Name: "docs"}},
+			SelectedIndex: 5,
+			SearchResults: []ffi.NekoSearchResult{{ID: "old", Score: 1.0}},
+		}
+		m.refreshSearch()
+
+		if len(m.SearchResults) != 1 || m.SearchResults[0].ID != "old" {
+			t.Fatalf("expected search results to remain unchanged, got %v", m.SearchResults)
 		}
 	})
 }

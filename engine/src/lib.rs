@@ -46,6 +46,19 @@ pub unsafe extern "C" fn neko_init(data_directory: *const c_char) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn neko_reload() -> c_int {
+    let engine = match ENGINE.get() {
+        Some(engine) => engine,
+        None => return Hairball::InternalError as c_int,
+    };
+
+    match engine.write().unwrap().reload() {
+        Ok(_) => 0,
+        Err(err) => err as c_int,
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn neko_shutdown() -> c_int {
     0
 }

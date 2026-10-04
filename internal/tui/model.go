@@ -9,6 +9,7 @@ import (
 )
 
 type panel int
+type TickingMessage struct{}
 
 const (
 	collectionPanel panel = iota
@@ -29,6 +30,7 @@ type Model struct {
 	SearchResults []ffi.NekoSearchResult
 	StatusMessage string
 	LastLatency   time.Duration
+	LastQuery     []float32
 }
 
 func Run() error {
@@ -40,7 +42,9 @@ func Run() error {
 }
 
 func (m Model) Init() tea.Cmd {
-	return nil
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return TickingMessage{}
+	})
 }
 
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -49,6 +53,21 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.isSearchPanelFocused() {
 			m.SearchInput += message.String()
 		}
+	case TickingMessage:
+		if err := ffi.Reload(); err != nil {
+			m.StatusMessage = fmt.Sprintf("reload error: %v", err)
+			return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+				return TickingMessage{}
+			})
+		}
+		latestCollections, latestSelectedIndex := reloadCollections(m.Collections, m.SelectedIndex)
+		m.Collections = latestCollections
+		m.SelectedIndex = latestSelectedIndex
+		m.refreshSearch()
+		m.StatusMessage = fmt.Sprintf("refreshed at %s", time.Now().Format("15:04:05"))
+		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return TickingMessage{}
+		})
 	case tea.KeyPressMsg:
 		switch message.String() {
 		case "q":
@@ -173,6 +192,7 @@ func (m Model) submitSearch() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	m.LastQuery = query
 	start := time.Now()
 	collection := m.Collections[m.SelectedIndex]
 	results, err := ffi.Search(collection.Name, query, 10)
@@ -187,4 +207,37 @@ func (m Model) submitSearch() (tea.Model, tea.Cmd) {
 	m.StatusMessage = fmt.Sprintf("found %d results in %s", len(results), m.LastLatency)
 	m.FocusedPanel = resultsPanel
 	return m, nil
+}
+
+func (m *Model) refreshSearch() {
+	shouldSkipRefresh := !m.isResultsPanelFocused() || len(m.LastQuery) == 0 || len(m.Collections) == 0
+	if shouldSkipRefresh {
+		return
+	}
+
+	isValidIndex := m.SelectedIndex < len(m.Collections)
+	if !isValidIndex {
+		return
+	}
+
+	collection := m.Collections[m.SelectedIndex]
+	results, err := ffi.Search(collection.Name, m.LastQuery, 10)
+	if err == nil {
+		m.SearchResults = results
+	}
+}
+
+func reloadCollections(previousCollections []Collection, previousIndex int) ([]Collection, int) {
+	currentCollections := loadCollections()
+	if previousIndex >= len(previousCollections) {
+		return currentCollections, 0
+	}
+
+	selectedName := previousCollections[previousIndex].Name
+	for i, collection := range currentCollections {
+		if collection.Name == selectedName {
+			return currentCollections, i
+		}
+	}
+	return currentCollections, 0
 }

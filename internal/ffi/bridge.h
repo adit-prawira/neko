@@ -28,6 +28,7 @@ typedef struct {
 
 int32_t neko_version(void);
 int32_t neko_init(const char *data_directory);
+int32_t neko_reload();
 int32_t neko_shutdown(void);
 int32_t neko_create(const char *name, uint32_t dim, uint8_t metric, const char *model);
 int32_t neko_create_with_hnsw(const char *name, uint32_t dim, uint8_t metric, const char *model, uint32_t max_connections, uint32_t ef_construction);

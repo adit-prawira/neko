@@ -90,6 +90,15 @@ func Init(dataDirectory string) error {
 	return nil
 }
 
+func Reload() error {
+	code := C.neko_reload()
+	if code != 0 {
+		return newHairballError("neko_reload", int(code))
+	}
+
+	return nil
+}
+
 func DefaultDataDirectory() string {
 	if dir := os.Getenv("NEKO_HOME"); dir != "" {
 		return dir

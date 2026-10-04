@@ -41,6 +41,8 @@ pub struct InputVectorDto {
     pub metadata: VectorMetadata,
 }
 
+type EngineState = (HashMap<String, Arc<Clowder>>, Option<WalWriter>);
+
 /*
  * The engine will responsible to
  * --> Register new namespace for vectors (neko create)
@@ -55,93 +57,22 @@ impl Engine {
             return Ok(());
         }
 
-        // ~/.neko/collections
-        let collection_directory = data_directory.join("collections");
-        fs::create_dir_all(&collection_directory)?;
-
-        let mut clowders = HashMap::new();
-        if !collection_directory.exists() {
-            return Ok(());
-        }
-        let entries = fs::read_dir(&collection_directory)?;
-        let wal_entries = Self::replay_wal_entries(&collection_directory)?;
-
-        for entry in entries {
-            let entry = entry?;
-            let is_directory = entry.file_type()?.is_dir();
-            if !is_directory {
-                continue;
-            };
-
-            let name = entry.file_name().to_string_lossy().to_string();
-            let manifest_path = entry.path().join("manifest.json");
-            let Ok(manifest) = ManifestManager::load_manifest(&manifest_path) else {
-                continue;
-            };
-
-            if manifest.collection_name != name {
-                continue;
-            };
-
-            let collection_wal_entries: Vec<&WalEntry> = wal_entries.iter().filter(|entry| entry.collection == name).collect();
-
-            let spec = IndexSpec::from_manifest(manifest.index_type, manifest.hnsw_max_connections, manifest.hnsw_ef_construction, manifest.hnsw_ef_search);
-            let Ok(index) = IndexFactory::load_or_build(spec, Some(manifest.dim), Some(manifest.metric), &entry.path(), &collection_wal_entries) else {
-                continue;
-            };
-
-            clowders.insert(
-                name.clone(),
-                Arc::new(Clowder {
-                    name,
-                    dim: manifest.dim,
-                    metric: manifest.metric,
-                    model: manifest.model,
-                    index_type: manifest.index_type,
-                    index,
-                    vectors: Mutex::new(HashMap::new()),
-                    metadata: Mutex::new(HashMap::new()),
-                    spec,
-                }),
-            );
-        }
-        for entry in &wal_entries {
-            let Some(clowder) = clowders.get(&entry.collection) else {
-                continue;
-            };
-            match entry.operation_code {
-                crate::wal::resource::OperationCode::Insert => {
-                    clowder.vectors.lock().unwrap().insert(entry.id.clone(), entry.vector.clone());
-                    if !entry.metadata.custom.is_empty() {
-                        clowder.metadata.lock().unwrap().insert(entry.id.clone(), entry.metadata.custom.clone());
-                    }
-                }
-                crate::wal::resource::OperationCode::Delete => {
-                    clowder.vectors.lock().unwrap().remove(&entry.id);
-                    clowder.metadata.lock().unwrap().remove(&entry.id);
-                }
-            }
-        }
-
-        for clowder in clowders.values() {
-            let entries: Vec<WalEntry> = wal_entries.iter().filter(|entry| entry.collection == clowder.name).cloned().collect();
-            if clowder.index.replay_wal(&entries).is_err() {
-                let vectors = clowder.vectors.lock().unwrap();
-                clowder.index.rebuild_from(&vectors)?;
-            }
-        }
-
-        let wal = WalWriter::open(&collection_directory, 64)
-            .inspect_err(|err| eprintln!("WAL: failed to open write-ahead log ({}); insert will not be persisted", err))
-            .ok();
+        let (clowders, wal) = Self::load_engine_state(data_directory)?;
         let engine = Self {
             clowders,
-            data_directory: data_directory.to_path_buf(),
             wal,
+            data_directory: data_directory.to_path_buf(),
         };
-        match ENGINE.set(RwLock::new(engine)) {
-            Ok(_) | Err(_) => Ok(()),
-        }
+
+        ENGINE.set(RwLock::new(engine)).map_err(|_| Hairball::InternalError)?;
+        Ok(())
+    }
+
+    pub fn reload(&mut self) -> Result<()> {
+        let (clowders, wal) = Self::load_engine_state(&self.data_directory)?;
+        self.clowders = clowders;
+        self.wal = wal;
+        Ok(())
     }
 
     pub fn create_clowder<'a>(&mut self, payload: CreateClowderDto<'a>) -> Result<()> {
@@ -370,6 +301,93 @@ impl Engine {
             self.checkpoint_index(&clowder, name)?;
         }
         Ok(())
+    }
+
+    fn load_engine_state(data_directory: &Path) -> Result<EngineState> {
+        // ~/.neko/collections
+        let collection_directory = data_directory.join("collections");
+        fs::create_dir_all(&collection_directory)?;
+
+        let mut clowders = HashMap::new();
+        if !collection_directory.exists() {
+            let wal = WalWriter::open(&collection_directory, 64)
+                .inspect_err(|err| eprintln!("WAL: failed to open write-ahead log ({}); insert will not be persisted", err))
+                .ok();
+            return Ok((clowders, wal));
+        }
+        let entries = fs::read_dir(&collection_directory)?;
+        let wal_entries = Self::replay_wal_entries(&collection_directory)?;
+
+        for entry in entries {
+            let entry = entry?;
+            let is_directory = entry.file_type()?.is_dir();
+            if !is_directory {
+                continue;
+            };
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            let manifest_path = entry.path().join("manifest.json");
+            let Ok(manifest) = ManifestManager::load_manifest(&manifest_path) else {
+                continue;
+            };
+
+            if manifest.collection_name != name {
+                continue;
+            };
+
+            let collection_wal_entries: Vec<&WalEntry> = wal_entries.iter().filter(|entry| entry.collection == name).collect();
+
+            let spec = IndexSpec::from_manifest(manifest.index_type, manifest.hnsw_max_connections, manifest.hnsw_ef_construction, manifest.hnsw_ef_search);
+            let Ok(index) = IndexFactory::load_or_build(spec, Some(manifest.dim), Some(manifest.metric), &entry.path(), &collection_wal_entries) else {
+                continue;
+            };
+
+            clowders.insert(
+                name.clone(),
+                Arc::new(Clowder {
+                    name,
+                    dim: manifest.dim,
+                    metric: manifest.metric,
+                    model: manifest.model,
+                    index_type: manifest.index_type,
+                    index,
+                    vectors: Mutex::new(HashMap::new()),
+                    metadata: Mutex::new(HashMap::new()),
+                    spec,
+                }),
+            );
+        }
+        for entry in &wal_entries {
+            let Some(clowder) = clowders.get(&entry.collection) else {
+                continue;
+            };
+            match entry.operation_code {
+                crate::wal::resource::OperationCode::Insert => {
+                    clowder.vectors.lock().unwrap().insert(entry.id.clone(), entry.vector.clone());
+                    if !entry.metadata.custom.is_empty() {
+                        clowder.metadata.lock().unwrap().insert(entry.id.clone(), entry.metadata.custom.clone());
+                    }
+                }
+                crate::wal::resource::OperationCode::Delete => {
+                    clowder.vectors.lock().unwrap().remove(&entry.id);
+                    clowder.metadata.lock().unwrap().remove(&entry.id);
+                }
+            }
+        }
+
+        for clowder in clowders.values() {
+            let entries: Vec<WalEntry> = wal_entries.iter().filter(|entry| entry.collection == clowder.name).cloned().collect();
+            if clowder.index.replay_wal(&entries).is_err() {
+                let vectors = clowder.vectors.lock().unwrap();
+                clowder.index.rebuild_from(&vectors)?;
+            }
+        }
+
+        let wal = WalWriter::open(&collection_directory, 64)
+            .inspect_err(|err| eprintln!("WAL: failed to open write-ahead log ({}); insert will not be persisted", err))
+            .ok();
+
+        Ok((clowders, wal))
     }
 
     fn resolve_tail_log(wal: &mut WalWriter, name: &str, input_vector: &InputVectorDto) -> Result<bool> {
@@ -822,6 +840,41 @@ mod tests {
 
         let result = engine.get_stats("nonexistent");
         assert_eq!(result.unwrap_err(), Hairball::NotFound);
+    }
+
+    #[test]
+    fn given_stale_engine_then_reload_restores_vector_count() {
+        let dir = temp_dir("engine_reload");
+        let mut engine = new_engine_with_wal(&dir, 64);
+        engine
+            .create_clowder(CreateClowderDto {
+                name: "docs",
+                dim: 3,
+                metric: 1,
+                model: None,
+                spec: IndexSpec::Brute,
+            })
+            .unwrap();
+
+        let metadata = VectorMetadata {
+            id: String::new(),
+            created_at: 0,
+            deleted: false,
+            custom: String::new(),
+        };
+
+        engine.insert_vector("docs", "doc_1", vec![0.1_f32; 3], &metadata).unwrap();
+
+        let stats = engine.get_stats("docs").unwrap();
+        assert_eq!(stats.vector_count, 1);
+
+        engine.clowders.clear();
+        engine.wal = None;
+
+        engine.reload().unwrap();
+
+        let stats_after_reload = engine.get_stats("docs").unwrap();
+        assert_eq!(stats_after_reload.vector_count, 1);
     }
 
     #[test]

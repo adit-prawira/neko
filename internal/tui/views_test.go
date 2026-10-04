@@ -142,3 +142,63 @@ func TestRenderCollections(t *testing.T) {
 		}
 	})
 }
+
+func TestRenderSearch(t *testing.T) {
+	t.Run("given_search_focused_then_renders_input_and_hint", func(t *testing.T) {
+		m := Model{
+			FocusedPanel: searchPanel,
+			SearchInput:  "/tmp/query.f32",
+		}
+		out := renderSearch(m)
+
+		if !strings.Contains(out, "/tmp/query.f32") {
+			t.Fatalf("expected search input, got: %s", out)
+		}
+		if !strings.Contains(out, "enter to search") {
+			t.Fatalf("expected search hint, got: %s", out)
+		}
+	})
+
+	t.Run("given_search_not_focused_then_renders_input_without_cursor", func(t *testing.T) {
+		m := Model{
+			FocusedPanel: collectionPanel,
+			SearchInput:  "/tmp/query.f32",
+		}
+		out := renderSearch(m)
+
+		if !strings.Contains(out, "/tmp/query.f32") {
+			t.Fatalf("expected search input, got: %s", out)
+		}
+	})
+}
+
+func TestRenderResults(t *testing.T) {
+	t.Run("given_no_results_then_renders_no_search_message", func(t *testing.T) {
+		m := Model{}
+		out := renderResults(m)
+
+		if !strings.Contains(out, "no search yet") {
+			t.Fatalf("expected no search message, got: %s", out)
+		}
+	})
+
+	t.Run("given_results_then_renders_ids_and_scores", func(t *testing.T) {
+		m := Model{
+			SearchResults: []ffi.NekoSearchResult{
+				{ID: "doc_a", Score: 1.5},
+				{ID: "doc_b", Score: 2.5},
+			},
+		}
+		out := renderResults(m)
+
+		if !strings.Contains(out, "doc_a") {
+			t.Fatalf("expected doc_a, got: %s", out)
+		}
+		if !strings.Contains(out, "doc_b") {
+			t.Fatalf("expected doc_b, got: %s", out)
+		}
+		if !strings.Contains(out, "1.5000") {
+			t.Fatalf("expected score 1.5000, got: %s", out)
+		}
+	})
+}

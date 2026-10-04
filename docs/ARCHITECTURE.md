@@ -12,8 +12,9 @@
 │  │   TUI (Go)           │  │   API Server (Go)                │ │
 │  │   Bubble Tea         │  │   • REST (net/http)              │ │
 │  │   • Collection view  │  │   • gRPC (protobuf)              │ │
-│  │   • Search UI        │  │   • Metadata filtering (BTree)   │ │
-│  │   • Live stats       │  │   • Multi-model management       │ │
+│  │   • Search UI        │  │   • Metadata filtering (Btree)   │ │
+│  │   • Live stats +     │  │   • Multi-model management       │ │
+│  │     search refresh   │  │                                  │ │
 │  └──────────┬───────────┘  └──────────────┬───────────────────┘ │
 │             │                             │                      │
 │             └──────────┬──────────────────┘                      │
@@ -182,6 +183,7 @@ Rust brute-force KNN → C SIMD dot_product() on all vectors
 
 // — Lifecycle —
 #[unsafe(no_mangle)] pub extern "C" fn neko_init(data_directory: *const c_char) -> i32;
+#[unsafe(no_mangle)] pub extern "C" fn neko_reload() -> i32;
 #[unsafe(no_mangle)] pub extern "C" fn neko_version() -> i32;
 #[unsafe(no_mangle)] pub extern "C" fn neko_shutdown() -> i32;
 
@@ -279,7 +281,8 @@ struct Clowder {
 
 struct Engine {
     clowders: HashMap<String, Arc<Clowder>>,
-    data_dir: PathBuf,
+    data_directory: PathBuf,
+    wal: Option<WalWriter>,
 }
 
 // Global singleton — initialized by neko_init
@@ -295,6 +298,8 @@ Locking strategy:
 All FFI functions acquire the engine lock first, then operate on the clowder.
 Insert path: `engine.read() → clowder.vectors.lock() → write → release → index.insert(...)`
 Search path: `engine.read() → clowder.vectors.lock() → clone reference → release → index.search(...)`
+
+`Engine::reload()` rebuilds `clowders` and the WAL writer from disk. The TUI calls it on a 2-second ticker so external CLI changes are reflected in the dashboard.
 
 Index abstraction (PR #61): the `Index` trait (`engine/src/index/resource.rs`) sits between
 `Clowder` and the actual algorithm. `BruteIndex` wraps the existing KNN scan and owns cosine

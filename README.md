@@ -46,6 +46,9 @@ curl -X POST localhost:3434/v1/collections/docs/search \
 
 # Browse the API in Swagger UI
 open http://localhost:3434/swagger/index.html
+
+# Or explore collections in the interactive TUI
+neko tui
 ```
 
 > **gRPC** — A second transport runs on the same port (3434) via cmux HTTP/2 multiplexing. The proto contract is in [`proto/neko.proto`](proto/neko.proto); generated Go stubs land in `internal/gen/neko/v1/`. PR #37 ships the scaffold (proto, codegen, multiplexed listener, reflection); PR #38 ships the 10 collection + vector RPCs. PR #39 ships full status-code coverage (`internal/grpc/errors_test.go`) and the REST/gRPC parity integration test (`internal/grpc/integration_test.go`). See the [gRPC section](#grpc) below for the developer workflow.
@@ -64,7 +67,7 @@ open http://localhost:3434/swagger/index.html
 | gRPC API | 10 collection + vector RPCs shipped (PR #38); full status mapping + parity test (PR #39) |
 | Pluggable `Index` trait (Brute + HNSW) | Shipped in-memory (PR #60); graph persisted on WAL rotation, deserialised on init (PRs #62/#63) |
 | Per-collection HNSW tuning (`--max-connections`, `--ef-construction`, `--ef-search`) | Shipped (PR #65 / issue #54) |
-| TUI dashboard (Bubble Tea) | Phase 1 |
+| TUI dashboard (Bubble Tea) | Shipped (`neko tui`) |
 | Bundled embedding model, `neko embed` | Phase 2 |
 | Clustering, replication | Phase 3 |
 

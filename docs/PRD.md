@@ -67,7 +67,7 @@ Neko is a **local-first vector database** that developers install on their machi
 - [x] HNSW graph persistence to disk — shipped (issues #53, PRs #62/#63). Graph dumped on WAL rotation, deserialised on init.
 - [x] HNSW tuning flags (`--m`, `--ef-construction`, `--ef-search`) — per-collection tunables shipped (issue #54, PR #65). `--ef-search` is also overrideable per-query at runtime via `neko search --ef-search <N>`. Defaults: m=16, ef_construction=200, ef_search=100. Settings persist across restart via the collection manifest.
 - [ ] Smarter shard-aware search strategy (Rayon parallel search across segments) — tracking issue #55.
-- [ ] `neko tui` — Bubble Tea interactive dashboard — tracking issue #56.
+- [x] `neko tui` — Bubble Tea interactive dashboard — shipped via issues #69–#73 (browse, inspect, file/typed search, live refresh).
 - [ ] REST/gRPC parity for HNSW — REST `POST /v1/collections` and gRPC `CreateCollection` still create brute-only collections; tracking issue #64 to add `index` / `max_connections` / `ef_construction` fields to those surfaces.
 
 ### Phase 2 — Embeddings (v0.3)

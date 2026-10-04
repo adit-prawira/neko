@@ -1,8 +1,18 @@
-.PHONY: build test clean format swag proto
+.PHONY: build build-c build-rust build-go test clean format swag proto
 
 build: swag proto
 	cd simd && make
 	cd engine && cargo build --release
+	CGO_LDFLAGS="-L$$PWD/engine/target/release -lneko_engine -Wl,-rpath,$$PWD/engine/target/release" \
+	go build -o neko ./cmd/neko
+
+build-c:
+	cd simd && make
+
+build-rust:
+	cd engine && cargo build --release
+
+build-go: build-rust
 	CGO_LDFLAGS="-L$$PWD/engine/target/release -lneko_engine -Wl,-rpath,$$PWD/engine/target/release" \
 	go build -o neko ./cmd/neko
 

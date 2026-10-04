@@ -123,7 +123,7 @@ impl WalWriter {
         let mut manifests: Vec<(String, Vec<PathBuf>)> = Vec::new();
 
         for name in collections.keys() {
-            let path = data_directory.join(name).join("manifest.json");
+            let path = data_directory.join("collections").join(name).join("manifest.json");
             if !path.exists() {
                 continue;
             }
@@ -147,8 +147,8 @@ impl WalWriter {
         frozen_files.sort();
 
         for frozen_path in &frozen_files {
-            self.compact_frozen(&frozen_path)?;
-            fs::remove_file(&frozen_path)?;
+            self.compact_frozen(frozen_path)?;
+            fs::remove_file(frozen_path)?;
         }
 
         Ok(())
@@ -202,7 +202,8 @@ impl WalWriter {
 
             let segment_name = format!("seg_{:016x}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
 
-            let mut writer = SegmentWriter::new(&self.data_directory, &segment_name, dim)?;
+            let collection_directory = self.data_directory.join("collections").join(name);
+            let mut writer = SegmentWriter::new(&collection_directory, &segment_name, dim)?;
             for entry in grouped_entries {
                 if entry.operation_code == OperationCode::Insert {
                     writer.append(&entry.vector, &entry.metadata)?;
@@ -210,7 +211,7 @@ impl WalWriter {
             }
 
             writer.finish()?;
-            ManifestManager::add_segment(&self.data_directory.join(name).join("manifest.json"), name, dim, 0, &segment_name)?;
+            ManifestManager::add_segment(&collection_directory.join("manifest.json"), name, dim, 0, &segment_name)?;
         }
         Ok(())
     }
@@ -330,7 +331,7 @@ mod tests {
     #[test]
     fn given_frozen_wal_files_then_compact_creates_segments_and_removes_frozen_files() {
         let dir = temp_dir("wal_writer_compact");
-        let collection_dir = dir.join("col");
+        let collection_dir = dir.join("collections").join("col");
         fs::create_dir_all(&collection_dir).unwrap();
         let mut wal = WalWriter::open(&dir, 0).unwrap();
         let metadata = VectorMetadata {
@@ -354,7 +355,7 @@ mod tests {
             .collect();
         assert!(frozen_files.is_empty(), "compact should remove frozen WAL files");
 
-        let manifest = ManifestManager::load_manifest(&dir.join("col").join("manifest.json")).unwrap();
+        let manifest = ManifestManager::load_manifest(&dir.join("collections").join("col").join("manifest.json")).unwrap();
         assert_eq!(manifest.segments.len(), 1, "compact should create one segment");
     }
 }

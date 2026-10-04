@@ -114,6 +114,156 @@ func TestUpdate(t *testing.T) {
 			t.Fatalf("expected SelectedIndex=0, got %d", got.SelectedIndex)
 		}
 	})
+
+	t.Run("given_slash_key_when_collection_focused_then_focuses_search_panel", func(t *testing.T) {
+		m := Model{FocusedPanel: collectionPanel}
+		updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: '/'}))
+
+		if cmd != nil {
+			t.Fatalf("expected nil command, got %T", cmd)
+		}
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.FocusedPanel != searchPanel {
+			t.Fatalf("expected searchPanel, got %d", got.FocusedPanel)
+		}
+	})
+
+	t.Run("given_slash_key_when_search_focused_then_appends_to_input", func(t *testing.T) {
+		m := Model{FocusedPanel: searchPanel}
+		updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: '/'}))
+
+		if cmd != nil {
+			t.Fatalf("expected nil command, got %T", cmd)
+		}
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.SearchInput != "/" {
+			t.Fatalf("expected SearchInput '/', got %q", got.SearchInput)
+		}
+	})
+
+	t.Run("given_esc_key_when_search_focused_then_returns_to_collections", func(t *testing.T) {
+		m := Model{FocusedPanel: searchPanel}
+		updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+
+		if cmd != nil {
+			t.Fatalf("expected nil command, got %T", cmd)
+		}
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.FocusedPanel != collectionPanel {
+			t.Fatalf("expected collectionPanel, got %d", got.FocusedPanel)
+		}
+	})
+
+	t.Run("given_esc_key_when_results_focused_then_returns_to_collections", func(t *testing.T) {
+		m := Model{FocusedPanel: resultsPanel}
+		updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+
+		if cmd != nil {
+			t.Fatalf("expected nil command, got %T", cmd)
+		}
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.FocusedPanel != collectionPanel {
+			t.Fatalf("expected collectionPanel, got %d", got.FocusedPanel)
+		}
+	})
+
+	t.Run("given_q_key_when_search_focused_then_appends_to_input", func(t *testing.T) {
+		m := Model{FocusedPanel: searchPanel}
+		updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
+
+		if cmd != nil {
+			t.Fatalf("expected nil command, got %T", cmd)
+		}
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.SearchInput != "q" {
+			t.Fatalf("expected SearchInput 'q', got %q", got.SearchInput)
+		}
+	})
+
+	t.Run("given_q_key_when_collection_focused_then_returns_quit_command", func(t *testing.T) {
+		m := Model{FocusedPanel: collectionPanel}
+		updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'q'}))
+
+		if cmd == nil {
+			t.Fatal("expected non-nil command, got nil")
+		}
+		if _, ok := updated.(Model); !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+	})
+
+	t.Run("given_tab_key_then_cycles_to_next_panel", func(t *testing.T) {
+		m := Model{FocusedPanel: collectionPanel}
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.FocusedPanel != searchPanel {
+			t.Fatalf("expected searchPanel, got %d", got.FocusedPanel)
+		}
+	})
+
+	t.Run("given_shift_tab_key_then_cycles_to_previous_panel", func(t *testing.T) {
+		m := Model{FocusedPanel: searchPanel}
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.FocusedPanel != collectionPanel {
+			t.Fatalf("expected collectionPanel, got %d", got.FocusedPanel)
+		}
+	})
+}
+
+func TestUpdatePaste(t *testing.T) {
+	t.Run("given_paste_message_when_search_focused_then_appends_text", func(t *testing.T) {
+		m := Model{FocusedPanel: searchPanel}
+		updated, cmd := m.Update(tea.PasteMsg{Content: "/tmp/query.f32"})
+
+		if cmd != nil {
+			t.Fatalf("expected nil command, got %T", cmd)
+		}
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.SearchInput != "/tmp/query.f32" {
+			t.Fatalf("expected SearchInput '/tmp/query.f32', got %q", got.SearchInput)
+		}
+	})
+
+	t.Run("given_paste_message_when_collection_focused_then_ignored", func(t *testing.T) {
+		m := Model{FocusedPanel: collectionPanel}
+		updated, cmd := m.Update(tea.PasteMsg{Content: "ignored"})
+
+		if cmd != nil {
+			t.Fatalf("expected nil command, got %T", cmd)
+		}
+		got, ok := updated.(Model)
+		if !ok {
+			t.Fatalf("expected Model, got %T", updated)
+		}
+		if got.SearchInput != "" {
+			t.Fatalf("expected empty SearchInput, got %q", got.SearchInput)
+		}
+	})
 }
 
 func TestView(t *testing.T) {

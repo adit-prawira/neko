@@ -6,7 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/adit-prawira/neko/internal/ffi"
-	"github.com/adit-prawira/neko/internal/shared"
 )
 
 type panel int
@@ -164,11 +163,11 @@ func (m Model) submitSearch() (tea.Model, tea.Cmd) {
 	}
 
 	if m.SearchInput == "" {
-		m.StatusMessage = "enter a vector file path"
+		m.StatusMessage = "enter a vector file path, or comma-separated floats"
 		return m, nil
 	}
 
-	query, err := shared.ParseVectorFile(m.SearchInput)
+	query, err := ParseQuery(m.SearchInput)
 	if err != nil {
 		m.StatusMessage = fmt.Sprintf("error :%v", err)
 		return m, nil

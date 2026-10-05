@@ -6,118 +6,82 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/adit-prawira/neko/internal/ffi"
+	"github.com/adit-prawira/neko/internal/tui/state"
 )
 
-type panel int
-type TickingMessage struct{}
-
-const (
-	collectionPanel panel = iota
-	searchPanel
-	resultsPanel
-)
-
-type Collection struct {
-	Name  string
-	Stats ffi.NekoStats
-}
-
-type Model struct {
-	Collections   []Collection
-	SelectedIndex int
-	FocusedPanel  panel
-	SearchInput   string
-	SearchResults []ffi.NekoSearchResult
-	StatusMessage string
-	LastLatency   time.Duration
-	LastQuery     []float32
-}
-
-func Run() error {
-	program := tea.NewProgram(initialModel())
-	if _, err := program.Run(); err != nil {
-		return fmt.Errorf("tui: %w", err)
-	}
-	return nil
-}
-
-func (m Model) Init() tea.Cmd {
+func Init(m state.Model) tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-		return TickingMessage{}
+		return state.TickingMessage{}
 	})
 }
 
-func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+func Update(m state.Model, message tea.Msg) (state.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.PasteMsg:
-		if m.isSearchPanelFocused() {
+		if m.IsSearchPanelFocused() {
 			m.SearchInput += message.String()
 		}
-	case TickingMessage:
+	case state.TickingMessage:
 		if err := ffi.Reload(); err != nil {
 			m.StatusMessage = fmt.Sprintf("reload error: %v", err)
-			return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-				return TickingMessage{}
-			})
+			return m, nextTick()
 		}
 		latestCollections, latestSelectedIndex := reloadCollections(m.Collections, m.SelectedIndex)
 		m.Collections = latestCollections
 		m.SelectedIndex = latestSelectedIndex
-		m.refreshSearch()
+		refreshSearch(&m)
 		m.StatusMessage = fmt.Sprintf("refreshed at %s", time.Now().Format("15:04:05"))
-		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-			return TickingMessage{}
-		})
+		return m, nextTick()
 	case tea.KeyPressMsg:
 		switch message.String() {
 		case "q":
-			if !m.isSearchPanelFocused() {
+			if !m.IsSearchPanelFocused() {
 				return m, tea.Quit
 			} else {
 				m.SearchInput += "q"
 			}
 		case "esc":
-			if m.isSearchPanelFocused() || m.isResultsPanelFocused() {
-				m.FocusedPanel = collectionPanel
+			if m.IsSearchPanelFocused() || m.IsResultsPanelFocused() {
+				m.FocusedPanel = state.CollectionPanel
 			} else {
 				return m, tea.Quit
 			}
 		case "/":
-			if m.isSearchPanelFocused() {
+			if m.IsSearchPanelFocused() {
 				m.SearchInput += "/"
 			} else {
-				m.FocusedPanel = searchPanel
+				m.FocusedPanel = state.SearchPanel
 			}
 		case "enter":
-			if m.isSearchPanelFocused() {
-				return m.submitSearch()
+			if m.IsSearchPanelFocused() {
+				return submitSearch(m)
 			}
 		case "up":
 			isValidIndex := m.SelectedIndex > 0
-			shouldGoUp := isValidIndex && m.isCollectionPanelFocused()
+			shouldGoUp := isValidIndex && m.IsCollectionPanelFocused()
 			if shouldGoUp {
 				m.SelectedIndex--
 			}
 		case "down":
 			isValidIndex := m.SelectedIndex < len(m.Collections)-1
-			shouldGoDown := isValidIndex && m.isCollectionPanelFocused()
+			shouldGoDown := isValidIndex && m.IsCollectionPanelFocused()
 			if shouldGoDown {
 				m.SelectedIndex++
 			}
 		case "backspace":
 			hasValues := len(m.SearchInput) > 0
-			shouldRemoveCharacter := hasValues && m.isSearchPanelFocused()
+			shouldRemoveCharacter := hasValues && m.IsSearchPanelFocused()
 			if shouldRemoveCharacter {
 				m.SearchInput = m.SearchInput[:len(m.SearchInput)-1]
 			}
 		case "tab":
 			nextPanel := (int(m.FocusedPanel) + 1) % 3
-			m.FocusedPanel = panel(nextPanel)
+			m.FocusedPanel = state.Panel(nextPanel)
 		case "shift+tab":
 			previousPanel := (int(m.FocusedPanel) + 2) % 3
-			m.FocusedPanel = panel(previousPanel)
+			m.FocusedPanel = state.Panel(previousPanel)
 		default:
-			if m.isSearchPanelFocused() {
+			if m.IsSearchPanelFocused() {
 				text := message.Key().Text
 				if text != "" {
 					m.SearchInput += text
@@ -128,33 +92,19 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) View() tea.View {
-	view := tea.NewView(renderView(m))
-	view.AltScreen = true
-	return view
-}
-
-func initialModel() Model {
-	return Model{
-		Collections:   loadCollections(),
-		SelectedIndex: 0,
-		FocusedPanel:  collectionPanel,
-	}
-}
-
-func loadCollections() []Collection {
+func loadCollections() []state.Collection {
 	names, err := ffi.List()
 	if err != nil {
 		return nil
 	}
 
-	items := make([]Collection, 0, len(names))
+	items := make([]state.Collection, 0, len(names))
 	for _, name := range names {
 		stats, err := ffi.Stats(name)
 		if err != nil {
 			continue
 		}
-		items = append(items, Collection{
+		items = append(items, state.Collection{
 			Name:  name,
 			Stats: stats,
 		})
@@ -163,19 +113,7 @@ func loadCollections() []Collection {
 	return items
 }
 
-func (m Model) isSearchPanelFocused() bool {
-	return m.FocusedPanel == searchPanel
-}
-
-func (m Model) isCollectionPanelFocused() bool {
-	return m.FocusedPanel == collectionPanel
-}
-
-func (m Model) isResultsPanelFocused() bool {
-	return m.FocusedPanel == resultsPanel
-}
-
-func (m Model) submitSearch() (tea.Model, tea.Cmd) {
+func submitSearch(m state.Model) (state.Model, tea.Cmd) {
 	if len(m.Collections) == 0 {
 		m.StatusMessage = "no collections to search"
 		return m, nil
@@ -205,12 +143,12 @@ func (m Model) submitSearch() (tea.Model, tea.Cmd) {
 
 	m.SearchResults = results
 	m.StatusMessage = fmt.Sprintf("found %d results in %s", len(results), m.LastLatency)
-	m.FocusedPanel = resultsPanel
+	m.FocusedPanel = state.ResultsPanel
 	return m, nil
 }
 
-func (m *Model) refreshSearch() {
-	shouldSkipRefresh := !m.isResultsPanelFocused() || len(m.LastQuery) == 0 || len(m.Collections) == 0
+func refreshSearch(m *state.Model) {
+	shouldSkipRefresh := !m.IsResultsPanelFocused() || len(m.LastQuery) == 0 || len(m.Collections) == 0
 	if shouldSkipRefresh {
 		return
 	}
@@ -227,7 +165,7 @@ func (m *Model) refreshSearch() {
 	}
 }
 
-func reloadCollections(previousCollections []Collection, previousIndex int) ([]Collection, int) {
+func reloadCollections(previousCollections []state.Collection, previousIndex int) ([]state.Collection, int) {
 	currentCollections := loadCollections()
 	if previousIndex >= len(previousCollections) {
 		return currentCollections, 0
@@ -240,4 +178,10 @@ func reloadCollections(previousCollections []Collection, previousIndex int) ([]C
 		}
 	}
 	return currentCollections, 0
+}
+
+func nextTick() tea.Cmd {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return state.TickingMessage{}
+	})
 }
